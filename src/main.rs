@@ -46,22 +46,18 @@ pub fn render_gradient(x_offset: i32, y_offset: i32) {
         let pitch = (width * BYTES_PER_PIXEL) as usize;
         let mut row: *mut u8 = BIT_MAP_MEMORY.cast();
         for y in 0..BIT_MAP_HEIGHT {
-            let mut pixel: *mut u8 = row.cast();
+            let mut pixel: *mut u32 = row.cast();
             for x in 0..BIT_MAP_WIDTH {
-                // Blue channel
-                *pixel = (x + x_offset) as u8;
-                pixel = pixel.add(1);
+                let blue = x + x_offset;
+                let green = y + y_offset;
 
-                // Green channel
-                *pixel = (y + y_offset) as u8;
-                pixel = pixel.add(1);
+                /*
+                Memory: BB GG RR xx
+                Register: xx RR GG BB
 
-                // Red channel
-                *pixel = 0;
-                pixel = pixel.add(1);
-
-                // Padding
-                *pixel = 0;
+                Shift GG up by 8 bits from bottom, to make them sit correctly in regsiter (little endian)
+                 */
+                *pixel = ((green << 8) | blue) as u32;
                 pixel = pixel.add(1);
             }
 
