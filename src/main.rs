@@ -38,15 +38,6 @@ static mut BIT_MAP_INFO: BITMAPINFO = BITMAPINFO {
 
 pub fn win32_resize_db_section(width: i32, height: i32) {
     unsafe {
-        // if BIT_MAP_HANDLE.is_invalid() {
-        //     DeleteObject(BIT_MAP_HANDLE);
-        // }
-
-        // if !BIT_MAP_DEVICE_CONTEXT.is_invalid() {
-        //     // Should we recreate these under certain special circumstances?
-        //     BIT_MAP_DEVICE_CONTEXT = CreateCompatibleDC(HDC(0));
-        // }
-
         if !BIT_MAP_MEMORY.is_null() {
             VirtualFree(BIT_MAP_MEMORY as *mut c_void, 0, MEM_RELEASE).unwrap_or_default();
         }
@@ -72,21 +63,32 @@ pub fn win32_resize_db_section(width: i32, height: i32) {
         )
         .cast();
 
-        // BIT_MAP_HANDLE = match CreateDIBSection(
-        //     BIT_MAP_DEVICE_CONTEXT,
-        //     &BIT_MAP_INFO,
-        //     DIB_RGB_COLORS,
-        //     BIT_MAP_MEMORY,
-        //     HANDLE(0),
-        //     0,
-        // ) {
-        //     // .unwrap() fails if you try to resize window to below the minimum window size. Temporarily handled like this so program doesn't crash
-        //     Ok(result) => result,
-        //     Err(e) => {
-        //         println!("{}", e);
-        //         HBITMAP::default()
-        //     }
-        // }
+        // Draw bitmap to window.
+        // Pitch determies when a new row starts in the sequence of bytes in the bitmap.
+        let pitch = (width * bytes_per_pixel) as usize;
+        let mut row: *mut u8 = BIT_MAP_MEMORY.cast();
+        for y in 0..BIT_MAP_HEIGHT {
+            let mut pixel: *mut u8 = row.cast();
+            for x in 0..BIT_MAP_WIDTH {
+                // Blue channel
+                *pixel = x as u8;
+                pixel = pixel.add(1);
+
+                // Green channel
+                *pixel = y as u8;
+                pixel = pixel.add(1);
+
+                // Red channel
+                *pixel = 0;
+                pixel = pixel.add(1);
+
+                // Padding
+                *pixel = 0;
+                pixel = pixel.add(1);
+            }
+
+            row = row.add(pitch);
+        }
     }
 }
 
