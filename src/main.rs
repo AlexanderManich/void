@@ -14,6 +14,7 @@ static mut RUNNING: bool = true;
 static mut BIT_MAP_WIDTH: i32 = 0;
 static mut BIT_MAP_HEIGHT: i32 = 0;
 static mut BIT_MAP_MEMORY: *mut *mut c_void = std::ptr::null_mut();
+static BYTES_PER_PIXEL: i32 = 4;
 static mut BIT_MAP_INFO: BITMAPINFO = BITMAPINFO {
     bmiHeader: BITMAPINFOHEADER {
         biSize: 0,
@@ -36,6 +37,39 @@ static mut BIT_MAP_INFO: BITMAPINFO = BITMAPINFO {
     }; 1],
 };
 
+pub fn render_gradient(x_offset: i32, y_offset: i32) {
+    unsafe {
+        let width = BIT_MAP_WIDTH;
+        let height = BIT_MAP_HEIGHT;
+        // Draw bitmap to window.
+        // Pitch determies when a new row starts in the sequence of bytes in the bitmap.
+        let pitch = (width * BYTES_PER_PIXEL) as usize;
+        let mut row: *mut u8 = BIT_MAP_MEMORY.cast();
+        for y in 0..BIT_MAP_HEIGHT {
+            let mut pixel: *mut u8 = row.cast();
+            for x in 0..BIT_MAP_WIDTH {
+                // Blue channel
+                *pixel = (x + x_offset) as u8;
+                pixel = pixel.add(1);
+
+                // Green channel
+                *pixel = (y + y_offset) as u8;
+                pixel = pixel.add(1);
+
+                // Red channel
+                *pixel = 0;
+                pixel = pixel.add(1);
+
+                // Padding
+                *pixel = 0;
+                pixel = pixel.add(1);
+            }
+
+            row = row.add(pitch);
+        }
+    }
+}
+
 pub fn win32_resize_db_section(width: i32, height: i32) {
     unsafe {
         if !BIT_MAP_MEMORY.is_null() {
@@ -53,8 +87,7 @@ pub fn win32_resize_db_section(width: i32, height: i32) {
         BIT_MAP_INFO.bmiHeader.biBitCount = 32;
         BIT_MAP_INFO.bmiHeader.biCompression = BI_RGB.0;
 
-        let bytes_per_pixel = 4;
-        let bit_map_memory_size = ((width * height) * bytes_per_pixel) as usize;
+        let bit_map_memory_size = ((width * height) * BYTES_PER_PIXEL) as usize;
         BIT_MAP_MEMORY = VirtualAlloc(
             Some(std::ptr::null()),
             bit_map_memory_size,
@@ -62,33 +95,6 @@ pub fn win32_resize_db_section(width: i32, height: i32) {
             PAGE_READWRITE,
         )
         .cast();
-
-        // Draw bitmap to window.
-        // Pitch determies when a new row starts in the sequence of bytes in the bitmap.
-        let pitch = (width * bytes_per_pixel) as usize;
-        let mut row: *mut u8 = BIT_MAP_MEMORY.cast();
-        for y in 0..BIT_MAP_HEIGHT {
-            let mut pixel: *mut u8 = row.cast();
-            for x in 0..BIT_MAP_WIDTH {
-                // Blue channel
-                *pixel = x as u8;
-                pixel = pixel.add(1);
-
-                // Green channel
-                *pixel = y as u8;
-                pixel = pixel.add(1);
-
-                // Red channel
-                *pixel = 0;
-                pixel = pixel.add(1);
-
-                // Padding
-                *pixel = 0;
-                pixel = pixel.add(1);
-            }
-
-            row = row.add(pitch);
-        }
     }
 }
 
@@ -182,7 +188,7 @@ fn main() -> Result<()> {
         window_class.lpszClassName = w!("GamingWindowClass");
 
         if RegisterClassW(&window_class) != 0 {
-            let window_handle = CreateWindowExW(
+            let window = CreateWindowExW(
                 WINDOW_EX_STYLE(0),
                 window_class.lpszClassName,
                 w!("Gaming"),
@@ -196,17 +202,36 @@ fn main() -> Result<()> {
                 window_class.hInstance,
                 None,
             );
-            if window_handle != HWND(0) {
+            if window != HWND(0) {
                 let mut msg = MSG::default();
+                let mut x_offset = 0;
+                let mut y_offset = 0;
                 while RUNNING {
-                    let message_result = GetMessageW(&mut msg, HWND(0), 0, 0);
-                    // Returns 0 if WM_QUIT is received, -1 if there is an error with the message loop
-                    if message_result == BOOL(0) || message_result == BOOL(-1) {
-                        break;
-                    } else {
+                    while (PeekMessageW(&mut msg, HWND(0), 0, 0, PM_REMOVE)).into() {
+                        if msg.message == WM_QUIT {
+                            RUNNING = false;
+                        }
+
                         TranslateMessage(&msg);
                         DispatchMessageW(&msg);
                     }
+                    render_gradient(x_offset, y_offset);
+                    let device_context = GetDC(window);
+                    let client_rect = &mut RECT::default();
+                    GetClientRect(window, client_rect).unwrap_or_default();
+                    let window_width = client_rect.right - client_rect.left;
+                    let window_height = client_rect.bottom - client_rect.top;
+
+                    win32_update_window(
+                        device_context,
+                        client_rect,
+                        0,
+                        0,
+                        window_width,
+                        window_height,
+                    );
+                    ReleaseDC(window, device_context);
+                    x_offset = x_offset + 1;
                 }
             }
         }
