@@ -1,55 +1,83 @@
 use std::{ffi::c_void, mem::size_of};
-
 use windows::{
     core::*,
     Win32::{
-        Foundation::*, Graphics::Gdi::*, System::LibraryLoader::*, System::Memory::*,
-        UI::WindowsAndMessaging::*,
+        Foundation::*,
+        Graphics::Gdi::*,
+        System::LibraryLoader::*,
+        System::Memory::*,
+        UI::{Input::XboxController::*, WindowsAndMessaging::*},
     },
 };
 
 //Global for now, change later
 static mut RUNNING: bool = true;
-//These variables are unbelievably scuffed change this shit asap
-static mut BIT_MAP_WIDTH: i32 = 0;
-static mut BIT_MAP_HEIGHT: i32 = 0;
-static mut BIT_MAP_MEMORY: *mut *mut c_void = std::ptr::null_mut();
-static BYTES_PER_PIXEL: i32 = 4;
-static mut BIT_MAP_INFO: BITMAPINFO = BITMAPINFO {
-    bmiHeader: BITMAPINFOHEADER {
-        biSize: 0,
-        biWidth: 0,
-        biHeight: 0,
-        biPlanes: 0,
-        biBitCount: 0,
-        biCompression: 0,
-        biSizeImage: 0,
-        biXPelsPerMeter: 0,
-        biYPelsPerMeter: 0,
-        biClrUsed: 0,
-        biClrImportant: 0,
+
+static mut GLOBAL_BACK_BUFFER: Win32OffscreenBuffer = Win32OffscreenBuffer {
+    width: 0,
+    height: 0,
+    memory: std::ptr::null_mut(),
+    info: BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: 0,
+            biWidth: 0,
+            biHeight: 0,
+            biPlanes: 0,
+            biBitCount: 0,
+            biCompression: 0,
+            biSizeImage: 0,
+            biXPelsPerMeter: 0,
+            biYPelsPerMeter: 0,
+            biClrUsed: 0,
+            biClrImportant: 0,
+        },
+        bmiColors: [RGBQUAD {
+            rgbBlue: 0,
+            rgbGreen: 0,
+            rgbRed: 0,
+            rgbReserved: 0,
+        }; 1],
     },
-    bmiColors: [RGBQUAD {
-        rgbBlue: 0,
-        rgbGreen: 0,
-        rgbRed: 0,
-        rgbReserved: 0,
-    }; 1],
+    pitch: 0,
+    bytes_per_pixel: 0,
 };
 
-pub fn render_gradient(x_offset: i32, y_offset: i32) {
+#[derive(Clone, Copy)]
+pub struct Win32OffscreenBuffer {
+    width: i32,
+    height: i32,
+    memory: *mut c_void,
+    info: BITMAPINFO,
+    pitch: usize,
+    bytes_per_pixel: i32,
+}
+
+pub struct Win32WindowDimension {
+    pub width: i32,
+    pub height: i32,
+}
+
+pub fn win32_get_window_dimension(window: HWND) -> (i32, i32) {
     unsafe {
-        let width = BIT_MAP_WIDTH;
-        let height = BIT_MAP_HEIGHT;
+        let mut client_rect = RECT::default();
+        GetClientRect(window, &mut client_rect).unwrap_or_default();
+        let width = client_rect.right - client_rect.left;
+        let height = client_rect.bottom - client_rect.top;
+
+        return (width, height);
+    }
+}
+
+pub fn render_gradient(buffer: &Win32OffscreenBuffer, blue_offset: i32, green_offset: i32) {
+    unsafe {
         // Draw bitmap to window.
-        // Pitch determies when a new row starts in the sequence of bytes in the bitmap.
-        let pitch = (width * BYTES_PER_PIXEL) as usize;
-        let mut row: *mut u8 = BIT_MAP_MEMORY.cast();
-        for y in 0..BIT_MAP_HEIGHT {
+        let mut row: *mut u8 = buffer.memory.cast();
+        for y in 0..buffer.height {
             let mut pixel: *mut u32 = row.cast();
-            for x in 0..BIT_MAP_WIDTH {
-                let blue = x + x_offset;
-                let green = y + y_offset;
+            for x in 0..buffer.width {
+                //truncate to 8 bits using mask, because i couldn't figure out how to cast it :)
+                let blue = x + blue_offset & 0xFF;
+                let green = y + green_offset & 0xFF;
 
                 /*
                 Memory: BB GG RR xx
@@ -61,64 +89,68 @@ pub fn render_gradient(x_offset: i32, y_offset: i32) {
                 pixel = pixel.add(1);
             }
 
-            row = row.add(pitch);
+            row = row.add(buffer.pitch);
         }
     }
 }
 
-pub fn win32_resize_db_section(width: i32, height: i32) {
+pub fn win32_resize_db_section(buffer: &mut Win32OffscreenBuffer, width: i32, height: i32) {
     unsafe {
-        if !BIT_MAP_MEMORY.is_null() {
-            VirtualFree(BIT_MAP_MEMORY as *mut c_void, 0, MEM_RELEASE).unwrap_or_default();
+        if !buffer.memory.is_null() {
+            VirtualFree(buffer.memory as *mut c_void, 0, MEM_RELEASE).unwrap_or_default();
         }
 
-        BIT_MAP_WIDTH = width;
-        BIT_MAP_HEIGHT = height;
+        buffer.width = width;
+        buffer.height = height;
+        buffer.bytes_per_pixel = 4;
 
-        BIT_MAP_INFO.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
-        BIT_MAP_INFO.bmiHeader.biWidth = BIT_MAP_WIDTH;
+        buffer.info.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
+        buffer.info.bmiHeader.biWidth = buffer.width;
         //Negative height means the bitmap is a top-down DIB and it's origin is the upper-left corner. Rows in window go sequentially from top to bottom.
-        BIT_MAP_INFO.bmiHeader.biHeight = -BIT_MAP_HEIGHT;
-        BIT_MAP_INFO.bmiHeader.biPlanes = 1;
-        BIT_MAP_INFO.bmiHeader.biBitCount = 32;
-        BIT_MAP_INFO.bmiHeader.biCompression = BI_RGB.0;
+        buffer.info.bmiHeader.biHeight = -buffer.height;
+        buffer.info.bmiHeader.biPlanes = 1;
+        buffer.info.bmiHeader.biBitCount = 32;
+        buffer.info.bmiHeader.biCompression = BI_RGB.0;
 
-        let bit_map_memory_size = ((width * height) * BYTES_PER_PIXEL) as usize;
-        BIT_MAP_MEMORY = VirtualAlloc(
+        let bit_map_memory_size = ((width * height) * buffer.bytes_per_pixel) as usize;
+        buffer.memory = VirtualAlloc(
             Some(std::ptr::null()),
             bit_map_memory_size,
             MEM_COMMIT,
             PAGE_READWRITE,
         )
         .cast();
+
+        // Pitch determies when a new row starts in the sequence of bytes in the bitmap.
+        buffer.pitch = (width * buffer.bytes_per_pixel) as usize;
     }
 }
 
-pub fn win32_update_window(
+pub fn win32_display_buffer_in_window(
     device_context: HDC,
-    window_rect: &RECT,
+    window_width: i32,
+    window_height: i32,
+    buffer: Win32OffscreenBuffer,
     x: i32,
     y: i32,
     width: i32,
     height: i32,
 ) {
     unsafe {
-        let window_width = window_rect.right - window_rect.left;
-        let window_height = window_rect.bottom - window_rect.top;
-
         //Draw whole bitmap onto whole window initially
+        //TODO: Aspect ratio correction
         StretchDIBits(
             device_context,
             0,
             0,
-            BIT_MAP_WIDTH,
-            BIT_MAP_HEIGHT,
-            0,
-            0,
             window_width,
             window_height,
-            Some(BIT_MAP_MEMORY as *const c_void),
-            &BIT_MAP_INFO,
+            0,
+            0,
+            buffer.width,
+            buffer.height,
+            Some(buffer.memory as *const c_void),
+            &buffer.info,
             DIB_RGB_COLORS,
             SRCCOPY,
         );
@@ -134,24 +166,16 @@ pub unsafe extern "system" fn win32_main_window_callback(
     unsafe {
         let mut result = LRESULT(0);
         match msg {
-            WM_SIZE => {
-                let client_rect = &mut RECT::default();
-                GetClientRect(window, client_rect).unwrap_or_default();
-                let width = client_rect.right - client_rect.left;
-                let height = client_rect.bottom - client_rect.top;
-                win32_resize_db_section(width, height);
-            }
+            WM_SIZE => {}
             WM_DESTROY => {
                 RUNNING = false;
-                // todo!("Handle this as an error")
+                // "Handle this as an error"
             }
             WM_CLOSE => {
                 RUNNING = false;
-                // todo!("Handle this with a message to the user? (Are you sure you want to quit?))")
+                // "Handle this with a message to the user? (Are you sure you want to quit?)
             }
-            WM_ACTIVATEAPP => {
-                // todo!()
-            }
+            WM_ACTIVATEAPP => {}
             WM_PAINT => {
                 let paint = &mut PAINTSTRUCT::default();
                 let device_context = BeginPaint(window, paint);
@@ -160,10 +184,17 @@ pub unsafe extern "system" fn win32_main_window_callback(
                 let width = paint.rcPaint.right - paint.rcPaint.left;
                 let height = paint.rcPaint.bottom - paint.rcPaint.top;
 
-                let client_rect = &mut RECT::default();
-                GetClientRect(window, client_rect).unwrap_or_default();
-
-                win32_update_window(device_context, client_rect, x, y, width, height);
+                let dimension = win32_get_window_dimension(window);
+                win32_display_buffer_in_window(
+                    device_context,
+                    dimension.0,
+                    dimension.1,
+                    GLOBAL_BACK_BUFFER,
+                    x,
+                    y,
+                    width,
+                    height,
+                );
                 EndPaint(window, paint);
             }
             _ => {
@@ -176,8 +207,11 @@ pub unsafe extern "system" fn win32_main_window_callback(
 }
 fn main() -> Result<()> {
     let mut window_class = WNDCLASSW::default();
+
     unsafe {
-        window_class.style = CS_OWNDC | CS_HREDRAW | CS_VREDRAW;
+        win32_resize_db_section(&mut GLOBAL_BACK_BUFFER, 1288, 720);
+
+        window_class.style = CS_HREDRAW | CS_VREDRAW;
         window_class.lpfnWndProc = Some(win32_main_window_callback);
         window_class.hInstance = GetModuleHandleW(PCWSTR::null()).unwrap().into();
         // window_class.hIcon = ;
@@ -211,24 +245,55 @@ fn main() -> Result<()> {
                         TranslateMessage(&msg);
                         DispatchMessageW(&msg);
                     }
-                    render_gradient(x_offset, y_offset);
-                    let device_context = GetDC(window);
-                    let client_rect = &mut RECT::default();
-                    GetClientRect(window, client_rect).unwrap_or_default();
-                    let window_width = client_rect.right - client_rect.left;
-                    let window_height = client_rect.bottom - client_rect.top;
 
-                    win32_update_window(
+                    //Should we poll this more frequently?
+                    for controller_index in 0..XUSER_MAX_COUNT {
+                        let controller_state = &mut XINPUT_STATE::default();
+                        if XInputGetState(controller_index, controller_state) == ERROR_SUCCESS.0 {
+                            //Controller is plugged in
+                            let pad = &controller_state.Gamepad;
+
+                            let up = pad.wButtons & XINPUT_GAMEPAD_DPAD_UP;
+                            let down = pad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN;
+                            let left = pad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT;
+                            let right = pad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT;
+                            let start = pad.wButtons & XINPUT_GAMEPAD_START;
+                            let back = pad.wButtons & XINPUT_GAMEPAD_BACK;
+                            let left_shoulder = pad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER;
+                            let right_shoulder = pad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER;
+                            let a_button = pad.wButtons & XINPUT_GAMEPAD_A;
+                            let b_button = pad.wButtons & XINPUT_GAMEPAD_B;
+                            let x_button = pad.wButtons & XINPUT_GAMEPAD_X;
+                            let y_button = pad.wButtons & XINPUT_GAMEPAD_Y;
+
+                            let stick_x = pad.sThumbLX;
+                            let stick_y = pad.sThumbLY;
+                        } else {
+                            //Controller is not available
+                        }
+                    }
+
+                    render_gradient(&GLOBAL_BACK_BUFFER, x_offset, y_offset);
+
+                    let device_context = GetDC(window);
+                    let dimension = win32_get_window_dimension(window);
+
+                    win32_display_buffer_in_window(
                         device_context,
-                        client_rect,
+                        dimension.0,
+                        dimension.1,
+                        GLOBAL_BACK_BUFFER,
                         0,
                         0,
-                        window_width,
-                        window_height,
+                        dimension.0,
+                        dimension.1,
                     );
                     ReleaseDC(window, device_context);
                     x_offset = x_offset + 1;
+                    y_offset += 2;
                 }
+            } else {
+                //Logging
             }
         }
     }
