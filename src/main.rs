@@ -4,16 +4,32 @@ use windows::{
     Win32::{
         Foundation::*,
         Graphics::Gdi::*,
+        Media::Audio::{
+            DirectSound::{
+                DirectSoundCreate, IDirectSound, DSBCAPS_PRIMARYBUFFER, DSBUFFERDESC,
+                DSSCL_PRIORITY,
+            },
+            WAVEFORMATEX, WAVE_FORMAT_PCM,
+        },
         System::LibraryLoader::*,
         System::Memory::*,
-        UI::{Input::XboxController::*, WindowsAndMessaging::*},
+        UI::{
+            Input::XboxController::{
+                XInputGetState, XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_B, XINPUT_GAMEPAD_BACK,
+                XINPUT_GAMEPAD_DPAD_DOWN, XINPUT_GAMEPAD_DPAD_LEFT, XINPUT_GAMEPAD_DPAD_RIGHT,
+                XINPUT_GAMEPAD_DPAD_UP, XINPUT_GAMEPAD_LEFT_SHOULDER,
+                XINPUT_GAMEPAD_RIGHT_SHOULDER, XINPUT_GAMEPAD_START, XINPUT_GAMEPAD_X,
+                XINPUT_GAMEPAD_Y, XINPUT_STATE, XUSER_MAX_COUNT,
+            },
+            WindowsAndMessaging::*,
+        },
     },
 };
 
 //Global for now, change later
 static mut RUNNING: bool = true;
-static mut x_offset: i32 = 0;
-static mut y_offset: i32 = 0;
+static mut X_OFFSET: i32 = 0;
+static mut Y_OFFSET: i32 = 0;
 
 static mut GLOBAL_BACK_BUFFER: Win32OffscreenBuffer = Win32OffscreenBuffer {
     width: 0,
@@ -59,15 +75,73 @@ pub struct Win32WindowDimension {
     pub height: i32,
 }
 
-pub fn win32_get_window_dimension(window: HWND) -> (i32, i32) {
-    unsafe {
-        let mut client_rect = RECT::default();
-        GetClientRect(window, &mut client_rect).unwrap_or_default();
-        let width = client_rect.right - client_rect.left;
-        let height = client_rect.bottom - client_rect.top;
+//DirectSound api (very old)
+pub fn win32_init_d_sound(window: HWND, samples_per_second: u32, buffer_size: u32) -> Result<()> {
+    // Define WaveFormat here since we're going to use it for multiple buffers
+    let mut wave_format = WAVEFORMATEX::default();
+    wave_format.wFormatTag = WAVE_FORMAT_PCM as u16; // This might introduce a bug, idk why the struct takes u16 when all the enum variants are u32?
+    wave_format.nChannels = 2;
+    wave_format.nSamplesPerSec = samples_per_second;
+    wave_format.wBitsPerSample = 16;
+    wave_format.nBlockAlign = (wave_format.nChannels * wave_format.wBitsPerSample) / 8;
+    wave_format.nAvgBytesPerSec = u32::from(wave_format.nBlockAlign) * wave_format.nSamplesPerSec;
+    wave_format.cbSize = 0;
 
-        return (width, height);
+    unsafe {
+        //Get a DirectSound object
+        let mut direct_sound = None;
+        DirectSoundCreate(Some(std::ptr::null()), &mut direct_sound, None)?;
+        direct_sound
+            .as_ref()
+            .unwrap()
+            .SetCooperativeLevel(window, DSSCL_PRIORITY)?;
+
+        // Create a primary buffer. Primary buffer is only created to get a handle, to be able to call SetFormat. ()
+        let mut primary_buffer = None;
+
+        //BufferDescription for primary buffer
+        let mut buffer_description = DSBUFFERDESC::default();
+        buffer_description.dwSize = size_of::<DSBUFFERDESC>() as u32;
+        buffer_description.dwFlags = DSBCAPS_PRIMARYBUFFER;
+
+        direct_sound.as_ref().unwrap().CreateSoundBuffer(
+            &buffer_description,
+            &mut primary_buffer,
+            None,
+        )?;
+        primary_buffer.unwrap().SetFormat(&wave_format)?;
+
+        // Create a secondary buffer (The buffer that we actually write into)
+        let mut secondary_buffer = None;
+
+        // BufferDescription for secondary buffer
+        let mut buffer_description = DSBUFFERDESC::default();
+        buffer_description.dwSize = size_of::<DSBUFFERDESC>() as u32;
+        buffer_description.dwFlags = 0;
+        buffer_description.dwBufferBytes = buffer_size;
+        buffer_description.lpwfxFormat = &mut wave_format;
+
+        direct_sound.as_ref().unwrap().CreateSoundBuffer(
+            &buffer_description,
+            &mut secondary_buffer,
+            None,
+        )?;
+
+        // Start playing
+    };
+
+    Ok(())
+}
+
+pub fn win32_get_window_dimension(window: HWND) -> Result<(i32, i32)> {
+    let mut client_rect = RECT::default();
+    unsafe {
+        GetClientRect(window, &mut client_rect)?;
     }
+    let width = client_rect.right - client_rect.left;
+    let height = client_rect.bottom - client_rect.top;
+
+    Ok((width, height))
 }
 
 pub fn render_gradient(buffer: &Win32OffscreenBuffer, blue_offset: i32, green_offset: i32) {
@@ -181,39 +255,40 @@ pub unsafe extern "system" fn win32_main_window_callback(
                 let vk_code = wparam;
                 let was_down = (lparam.0 & (1 << 30)) != 0;
                 let is_down = (lparam.0 & (1 << 31)) == 0;
-                //if was_down != is_down {
-                match vk_code {
-                    WPARAM(0x57) => {
-                        //W key
-                        y_offset += 1;
-                    }
-                    WPARAM(0x41) => {
-                        //A key
-                        x_offset -= 1;
-                    }
-                    WPARAM(0x53) => {
-                        //S key
-                        y_offset -= 1;
-                    }
-                    WPARAM(0x44) => {
-                        //D key
-                        x_offset += 1;
-                    }
-                    WPARAM(0x73) => {
-                        let alt_key_was_down = (lparam.0 & (1 << 29)) != 0;
-                        if alt_key_was_down {
-                            RUNNING = false;
+                //Check prevents repeat key presses when holding key
+                if was_down != is_down {
+                    match vk_code {
+                        WPARAM(0x57) => {
+                            //W key
+                            Y_OFFSET += 1;
                         }
+                        WPARAM(0x41) => {
+                            //A key
+                            X_OFFSET -= 1;
+                        }
+                        WPARAM(0x53) => {
+                            //S key
+                            Y_OFFSET -= 1;
+                        }
+                        WPARAM(0x44) => {
+                            //D key
+                            X_OFFSET += 1;
+                        }
+                        WPARAM(0x73) => {
+                            let alt_key_was_down = (lparam.0 & (1 << 29)) != 0;
+                            if alt_key_was_down {
+                                RUNNING = false;
+                            }
+                        }
+                        WPARAM(_) => {}
                     }
-                    WPARAM(_) => {}
                 }
-                //            }
             }
             WM_PAINT => {
                 let paint = &mut PAINTSTRUCT::default();
                 let device_context = BeginPaint(window, paint);
 
-                let dimension = win32_get_window_dimension(window);
+                let dimension = win32_get_window_dimension(window).unwrap_or_default();
                 win32_display_buffer_in_window(
                     device_context,
                     &GLOBAL_BACK_BUFFER,
@@ -235,7 +310,6 @@ fn main() -> Result<()> {
 
     unsafe {
         win32_resize_db_section(&mut GLOBAL_BACK_BUFFER, 1280, 720);
-
         window_class.style = CS_HREDRAW | CS_VREDRAW;
         window_class.lpfnWndProc = Some(win32_main_window_callback);
         window_class.hInstance = GetModuleHandleW(PCWSTR::null()).unwrap().into();
@@ -259,6 +333,9 @@ fn main() -> Result<()> {
             );
             if window != HWND(0) {
                 let mut msg = MSG::default();
+                let device_context = GetDC(window);
+
+                win32_init_d_sound(window, 48000, (48000 * size_of::<i16>() * 2) as u32)?;
 
                 while RUNNING {
                     while (PeekMessageW(&mut msg, HWND(0), 0, 0, PM_REMOVE)).into() {
@@ -272,36 +349,35 @@ fn main() -> Result<()> {
 
                     //CONTROLLER INPUT
                     //Should we poll this more frequently?
-                    // for controller_index in 0..XUSER_MAX_COUNT {
-                    //     let controller_state = &mut XINPUT_STATE::default();
-                    //     if XInputGetState(controller_index, controller_state) == ERROR_SUCCESS.0 {
-                    //         //Controller is plugged in
-                    //         let pad = &controller_state.Gamepad;
+                    for controller_index in 0..XUSER_MAX_COUNT {
+                        let controller_state = &mut XINPUT_STATE::default();
+                        if XInputGetState(controller_index, controller_state) == ERROR_SUCCESS.0 {
+                            //Controller is plugged in
+                            let pad = &controller_state.Gamepad;
 
-                    //         let up = pad.wButtons & XINPUT_GAMEPAD_DPAD_UP;
-                    //         let down = pad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN;
-                    //         let left = pad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT;
-                    //         let right = pad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT;
-                    //         let start = pad.wButtons & XINPUT_GAMEPAD_START;
-                    //         let back = pad.wButtons & XINPUT_GAMEPAD_BACK;
-                    //         let left_shoulder = pad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER;
-                    //         let right_shoulder = pad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER;
-                    //         let a_button = pad.wButtons & XINPUT_GAMEPAD_A;
-                    //         let b_button = pad.wButtons & XINPUT_GAMEPAD_B;
-                    //         let x_button = pad.wButtons & XINPUT_GAMEPAD_X;
-                    //         let y_button = pad.wButtons & XINPUT_GAMEPAD_Y;
+                            let up = pad.wButtons & XINPUT_GAMEPAD_DPAD_UP;
+                            let down = pad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN;
+                            let left = pad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT;
+                            let right = pad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT;
+                            let start = pad.wButtons & XINPUT_GAMEPAD_START;
+                            let back = pad.wButtons & XINPUT_GAMEPAD_BACK;
+                            let left_shoulder = pad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER;
+                            let right_shoulder = pad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER;
+                            let a_button = pad.wButtons & XINPUT_GAMEPAD_A;
+                            let b_button = pad.wButtons & XINPUT_GAMEPAD_B;
+                            let x_button = pad.wButtons & XINPUT_GAMEPAD_X;
+                            let y_button = pad.wButtons & XINPUT_GAMEPAD_Y;
 
-                    //         let stick_x = pad.sThumbLX;
-                    //         let stick_y = pad.sThumbLY;
-                    //     } else {
-                    //         //Controller is not available
-                    //     }
-                    // }
+                            let stick_x = pad.sThumbLX;
+                            let stick_y = pad.sThumbLY;
+                        } else {
+                            //Controller is not available
+                        }
+                    }
 
-                    render_gradient(&GLOBAL_BACK_BUFFER, x_offset, y_offset);
+                    render_gradient(&GLOBAL_BACK_BUFFER, X_OFFSET, Y_OFFSET);
 
-                    let device_context = GetDC(window);
-                    let dimension = win32_get_window_dimension(window);
+                    let dimension = win32_get_window_dimension(window)?;
 
                     win32_display_buffer_in_window(
                         device_context,
