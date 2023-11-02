@@ -1,4 +1,6 @@
-use std::{ffi::c_void, mem::size_of};
+#![deny(unsafe_op_in_unsafe_fn)]
+
+use std::{env, ffi::c_void, mem::size_of};
 use windows::{
     core::*,
     Win32::{
@@ -6,8 +8,8 @@ use windows::{
         Graphics::Gdi::*,
         Media::Audio::{
             DirectSound::{
-                DirectSoundCreate, IDirectSound, DSBCAPS_PRIMARYBUFFER, DSBUFFERDESC,
-                DSSCL_PRIORITY,
+                DirectSoundCreate8, IDirectSound8, IDirectSoundBuffer, DSBCAPS_PRIMARYBUFFER,
+                DSBPLAY_LOOPING, DSBUFFERDESC, DSSCL_PRIORITY,
             },
             WAVEFORMATEX, WAVE_FORMAT_PCM,
         },
@@ -28,6 +30,9 @@ use windows::{
 
 //Global for now, change later
 static mut RUNNING: bool = true;
+static mut DIRECT_SOUND: Option<IDirectSound8> = None;
+static mut SECONDARY_BUFFER: Option<IDirectSoundBuffer> = None;
+
 static mut X_OFFSET: i32 = 0;
 static mut Y_OFFSET: i32 = 0;
 
@@ -87,56 +92,86 @@ pub fn win32_init_d_sound(window: HWND, samples_per_second: u32, buffer_size: u3
     wave_format.nAvgBytesPerSec = u32::from(wave_format.nBlockAlign) * wave_format.nSamplesPerSec;
     wave_format.cbSize = 0;
 
+    //Get a DirectSound object
+    /* DIRECT_SOUND declared globally to fix bug where the pointer to SECONDARY_BUFFER got dropped when DIRECT_SOUND went out of scope,
+    making the SECONDARY_BUFFER pointer unaligned, causing the program to crash when calling any of the methods on the buffer.
+    A solution might be to just returning the buffer from the function, but that seems to cause the same problem */
+
     unsafe {
-        //Get a DirectSound object
-        let mut direct_sound = None;
-        DirectSoundCreate(Some(std::ptr::null()), &mut direct_sound, None)?;
-        direct_sound
+        match DirectSoundCreate8(Some(std::ptr::null()), &mut DIRECT_SOUND, None) {
+            Ok(_) => {}
+            Err(e) => {
+                println!("DirectSoundCreate() Error: {}", e);
+            }
+        };
+        match DIRECT_SOUND
             .as_ref()
             .unwrap()
-            .SetCooperativeLevel(window, DSSCL_PRIORITY)?;
+            .SetCooperativeLevel(window, DSSCL_PRIORITY)
+        {
+            Ok(_) => {}
+            Err(e) => {
+                println!("SetCooperativeLevel() Error: {}", e);
+            }
+        }
+    }
 
-        // Create a primary buffer. Primary buffer is only created to get a handle, to be able to call SetFormat. ()
-        let mut primary_buffer = None;
+    // Create a primary buffer. Primary buffer is only created to get a handle, to be able to call SetFormat.
+    let mut primary_buffer = None;
 
-        //BufferDescription for primary buffer
-        let mut buffer_description = DSBUFFERDESC::default();
-        buffer_description.dwSize = size_of::<DSBUFFERDESC>() as u32;
-        buffer_description.dwFlags = DSBCAPS_PRIMARYBUFFER;
+    //BufferDescription for primary buffer
+    let mut buffer_description = DSBUFFERDESC::default();
+    buffer_description.dwSize = size_of::<DSBUFFERDESC>() as u32;
+    buffer_description.dwFlags = DSBCAPS_PRIMARYBUFFER;
 
-        direct_sound.as_ref().unwrap().CreateSoundBuffer(
+    unsafe {
+        match DIRECT_SOUND.as_ref().unwrap().CreateSoundBuffer(
             &buffer_description,
             &mut primary_buffer,
             None,
-        )?;
-        primary_buffer.unwrap().SetFormat(&wave_format)?;
+        ) {
+            Ok(_) => {}
+            Err(e) => {
+                println!("CreateSoundBuffer() Error: {}", e);
+            }
+        }
+        match primary_buffer.unwrap().SetFormat(&wave_format) {
+            Ok(_) => {}
+            Err(e) => {
+                println!("SetFormat() Error: {}", e);
+            }
+        };
+    }
 
-        // Create a secondary buffer (The buffer that we actually write into)
-        let mut secondary_buffer = None;
+    // Create a secondary buffer that we are actually going to write into. (Declared globally)
 
-        // BufferDescription for secondary buffer
-        let mut buffer_description = DSBUFFERDESC::default();
-        buffer_description.dwSize = size_of::<DSBUFFERDESC>() as u32;
-        buffer_description.dwFlags = 0;
-        buffer_description.dwBufferBytes = buffer_size;
-        buffer_description.lpwfxFormat = &mut wave_format;
-
-        direct_sound.as_ref().unwrap().CreateSoundBuffer(
+    // BufferDescription for secondary buffer
+    let mut buffer_description = DSBUFFERDESC::default();
+    buffer_description.dwSize = size_of::<DSBUFFERDESC>() as u32;
+    buffer_description.dwFlags = 0;
+    buffer_description.dwBufferBytes = buffer_size;
+    buffer_description.lpwfxFormat = &mut wave_format;
+    unsafe {
+        match DIRECT_SOUND.as_ref().unwrap().CreateSoundBuffer(
             &buffer_description,
-            &mut secondary_buffer,
+            &mut SECONDARY_BUFFER,
             None,
-        )?;
-
+        ) {
+            Ok(_) => {}
+            Err(e) => {
+                println!("CreateSoundBuffer() Error: {}", e);
+            }
+        }
         // Start playing
-    };
 
-    Ok(())
+        Ok(())
+    }
 }
 
 pub fn win32_get_window_dimension(window: HWND) -> Result<(i32, i32)> {
     let mut client_rect = RECT::default();
     unsafe {
-        GetClientRect(window, &mut client_rect)?;
+        GetClientRect(window, &mut client_rect).unwrap();
     }
     let width = client_rect.right - client_rect.left;
     let height = client_rect.bottom - client_rect.top;
@@ -306,6 +341,8 @@ pub unsafe extern "system" fn win32_main_window_callback(
     }
 }
 fn main() -> Result<()> {
+    env::set_var("RUST_BACKTRACE", "0");
+
     let mut window_class = WNDCLASSW::default();
 
     unsafe {
@@ -335,7 +372,28 @@ fn main() -> Result<()> {
                 let mut msg = MSG::default();
                 let device_context = GetDC(window);
 
-                win32_init_d_sound(window, 48000, (48000 * size_of::<i16>() * 2) as u32)?;
+                // Sound test
+                let samples_per_second = 48000;
+                let tone_hz = 256;
+                let tone_volume = 200;
+                let mut running_sample_index = 0;
+                let square_wave_period = samples_per_second / tone_hz;
+                let half_square_wave_period = square_wave_period / 2;
+                let bytes_per_sample = size_of::<i16>() as u32 * 2;
+                let secondary_buffer_size = samples_per_second * bytes_per_sample;
+
+                win32_init_d_sound(window, samples_per_second, secondary_buffer_size).unwrap();
+
+                match SECONDARY_BUFFER
+                    .as_ref()
+                    .unwrap()
+                    .Play(0, 0, DSBPLAY_LOOPING)
+                {
+                    Ok(_) => {}
+                    Err(e) => {
+                        println!("Play() Error: {}", e);
+                    }
+                }
 
                 while RUNNING {
                     while (PeekMessageW(&mut msg, HWND(0), 0, 0, PM_REMOVE)).into() {
@@ -377,7 +435,98 @@ fn main() -> Result<()> {
 
                     render_gradient(&GLOBAL_BACK_BUFFER, X_OFFSET, Y_OFFSET);
 
-                    let dimension = win32_get_window_dimension(window)?;
+                    // DirectSound output test
+                    let mut play_cursor = 0;
+                    let mut write_cursor = 0;
+                    match SECONDARY_BUFFER
+                        .as_ref()
+                        .unwrap()
+                        .GetCurrentPosition(Some(&mut play_cursor), Some(&mut write_cursor))
+                    {
+                        Ok(_) => {}
+                        Err(e) => {
+                            println!("GetCurrentPosition() Error: {}", e);
+                        }
+                    }
+                    {
+                        let byte_to_lock =
+                            (running_sample_index * bytes_per_sample) % secondary_buffer_size;
+                        let mut bytes_to_write;
+                        if byte_to_lock > play_cursor {
+                            bytes_to_write = secondary_buffer_size - byte_to_lock;
+                            bytes_to_write += play_cursor;
+                        } else {
+                            bytes_to_write = play_cursor - byte_to_lock;
+                        }
+                        let mut region1 = std::ptr::null_mut();
+                        let mut region1_size = 0;
+                        let mut region2 = std::ptr::null_mut();
+                        let mut region2_size = 0;
+
+                        // println!("Byte to lock: {:?}\n bytes_to_write: {:?}\n region1: {:?}\n region1_size: {:?}\n region2: {:?}\n region2_size {:?}\n", byte_to_lock, bytes_to_write, region1, region1_size, region2, region2_size);
+                        match SECONDARY_BUFFER.as_ref().unwrap().Lock(
+                            byte_to_lock,
+                            bytes_to_write,
+                            &mut region1,
+                            &mut region1_size,
+                            Some(&mut region2),
+                            Some(&mut region2_size),
+                            0,
+                        ) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                println!("Lock() Error: {}", e);
+                            }
+                        }
+
+                        // println!("Byte to lock: {:?}\n bytes_to_write: {:?}\n region1: {:?}\n region1_size: {:?}\n region2: {:?}\n region2_size {:?}\n", byte_to_lock, bytes_to_write, region1, region1_size, region2, region2_size);
+
+                        let mut sample_out = region1 as *mut i16;
+                        let region1_sample_count = region1_size / bytes_per_sample;
+
+                        for _ in 0..region1_sample_count {
+                            let sample_value: i16;
+                            if ((running_sample_index / half_square_wave_period) % 2) == 0 {
+                                sample_value = tone_volume;
+                            } else {
+                                sample_value = -tone_volume;
+                            }
+                            *sample_out = sample_value;
+                            sample_out = sample_out.add(1);
+                            *sample_out = sample_value;
+                            sample_out = sample_out.add(1);
+                            running_sample_index += 1;
+                        }
+
+                        sample_out = region2 as *mut i16;
+                        let region2_sample_count = region2_size / bytes_per_sample;
+
+                        for _ in 0..region2_sample_count {
+                            let sample_value: i16;
+                            if ((running_sample_index / half_square_wave_period) % 2) == 0 {
+                                sample_value = tone_volume;
+                            } else {
+                                sample_value = -tone_volume;
+                            }
+                            *sample_out = sample_value;
+                            sample_out = sample_out.add(1);
+                            *sample_out = sample_value;
+                            sample_out = sample_out.add(1);
+                            running_sample_index += 1;
+                        }
+                        match SECONDARY_BUFFER.as_ref().unwrap().Unlock(
+                            region1,
+                            region1_size,
+                            Some(region2),
+                            region2_size,
+                        ) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                println!("Unlock() Error: {}", e);
+                            }
+                        }
+                    }
+                    let dimension = win32_get_window_dimension(window).unwrap();
 
                     win32_display_buffer_in_window(
                         device_context,
