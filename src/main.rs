@@ -1,5 +1,5 @@
 #![deny(unsafe_op_in_unsafe_fn)]
-
+mod gaming;
 use std::{arch::x86_64::_rdtsc, env, f32::consts::PI, ffi::c_void, mem::size_of};
 use windows::{
     core::*,
@@ -28,6 +28,8 @@ use windows::{
     },
 };
 
+use crate::gaming::gaming::GameOffscreenBuffer;
+
 //Global for now, change later
 static mut RUNNING: bool = true;
 static mut DIRECT_SOUND: Option<IDirectSound8> = None;
@@ -35,7 +37,7 @@ static mut SECONDARY_BUFFER: Option<IDirectSoundBuffer> = None;
 static mut X_OFFSET: i32 = 0;
 static mut Y_OFFSET: i32 = 0;
 
-static mut GLOBAL_BACK_BUFFER: Win32OffScreenBuffer = Win32OffScreenBuffer {
+static mut GLOBAL_BACK_BUFFER: Win32OffscreenBuffer = Win32OffscreenBuffer {
     width: 0,
     height: 0,
     memory: std::ptr::null_mut(),
@@ -65,7 +67,7 @@ static mut GLOBAL_BACK_BUFFER: Win32OffScreenBuffer = Win32OffScreenBuffer {
 };
 
 #[derive(Clone, Copy)]
-pub struct Win32OffScreenBuffer {
+pub struct Win32OffscreenBuffer {
     width: i32,
     height: i32,
     memory: *mut c_void,
@@ -99,6 +101,7 @@ pub fn win32_fill_sound_buffer(
     let mut region1_size = 0;
     let mut region2 = std::ptr::null_mut();
     let mut region2_size = 0;
+
     unsafe {
         match SECONDARY_BUFFER.as_ref().unwrap().Lock(
             byte_to_lock,
@@ -264,33 +267,7 @@ pub fn win32_get_window_dimension(window: HWND) -> Result<(i32, i32)> {
     Ok((width, height))
 }
 
-pub fn render_gradient(buffer: &Win32OffScreenBuffer, blue_offset: i32, green_offset: i32) {
-    unsafe {
-        // Draw bitmap to window.
-        let mut row: *mut u8 = buffer.memory.cast();
-        for y in 0..buffer.height {
-            let mut pixel: *mut u32 = row.cast();
-            for x in 0..buffer.width {
-                //truncate to 8 bits using mask, because i couldn't figure out how to cast it :)
-                let blue = x + blue_offset & 0xFF;
-                let green = y + green_offset & 0xFF;
-
-                /*
-                Memory: BB GG RR xx
-                Register: xx RR GG BB
-
-                Shift GG up by 8 bits from bottom, to make them sit correctly in regsiter (little endian)
-                 */
-                *pixel = ((green << 8) | blue) as u32;
-                pixel = pixel.add(1);
-            }
-
-            row = row.add(buffer.pitch);
-        }
-    }
-}
-
-pub fn win32_resize_db_section(buffer: &mut Win32OffScreenBuffer, width: i32, height: i32) {
+pub fn win32_resize_db_section(buffer: &mut Win32OffscreenBuffer, width: i32, height: i32) {
     unsafe {
         if !buffer.memory.is_null() {
             VirtualFree(buffer.memory as *mut c_void, 0, MEM_RELEASE).unwrap_or_default();
@@ -324,7 +301,7 @@ pub fn win32_resize_db_section(buffer: &mut Win32OffScreenBuffer, width: i32, he
 
 pub fn win32_display_buffer_in_window(
     device_context: HDC,
-    buffer: &Win32OffScreenBuffer,
+    buffer: &Win32OffscreenBuffer,
     window_width: i32,
     window_height: i32,
 ) {
@@ -376,34 +353,34 @@ pub unsafe extern "system" fn win32_main_window_callback(
                 let was_down = (lparam.0 & (1 << 30)) != 0;
                 let is_down = (lparam.0 & (1 << 31)) == 0;
                 //Check prevents repeat key presses when holding key
-                if was_down != is_down {
-                    match vk_code {
-                        WPARAM(0x57) => {
-                            //W key
-                            Y_OFFSET += 1;
-                        }
-                        WPARAM(0x41) => {
-                            //A key
-                            X_OFFSET -= 1;
-                        }
-                        WPARAM(0x53) => {
-                            //S key
-                            Y_OFFSET -= 1;
-                        }
-                        WPARAM(0x44) => {
-                            //D key
-                            X_OFFSET += 1;
-                        }
-                        WPARAM(0x73) => {
-                            //F4 key
-                            let alt_key_was_down = (lparam.0 & (1 << 29)) != 0;
-                            if alt_key_was_down {
-                                RUNNING = false;
-                            }
-                        }
-                        WPARAM(_) => {}
+                // if was_down != is_down {
+                match vk_code {
+                    WPARAM(0x57) => {
+                        //W key
+                        Y_OFFSET += 2;
                     }
+                    WPARAM(0x41) => {
+                        //A key
+                        X_OFFSET -= 2;
+                    }
+                    WPARAM(0x53) => {
+                        //S key
+                        Y_OFFSET -= 2;
+                    }
+                    WPARAM(0x44) => {
+                        //D key
+                        X_OFFSET += 2;
+                    }
+                    WPARAM(0x73) => {
+                        //F4 key
+                        let alt_key_was_down = (lparam.0 & (1 << 29)) != 0;
+                        if alt_key_was_down {
+                            RUNNING = false;
+                        }
+                    }
+                    WPARAM(_) => {}
                 }
+                // }
             }
             WM_PAINT => {
                 let paint = &mut PAINTSTRUCT::default();
@@ -427,7 +404,7 @@ pub unsafe extern "system" fn win32_main_window_callback(
     }
 }
 fn main() -> Result<()> {
-    env::set_var("RUST_BACKTRACE", "0");
+    // env::set_var("RUST_BACKTRACE", "0");
 
     unsafe {
         let mut perf_counter_freq: i64 = 0;
@@ -538,7 +515,13 @@ fn main() -> Result<()> {
                         }
                     }
 
-                    render_gradient(&GLOBAL_BACK_BUFFER, X_OFFSET, Y_OFFSET);
+                    let mut buffer = GameOffscreenBuffer::default();
+                    buffer.memory = GLOBAL_BACK_BUFFER.memory;
+                    buffer.width = GLOBAL_BACK_BUFFER.width;
+                    buffer.height = GLOBAL_BACK_BUFFER.height;
+                    buffer.pitch = GLOBAL_BACK_BUFFER.pitch;
+
+                    gaming::gaming::game_update_and_render(&buffer, X_OFFSET, Y_OFFSET);
 
                     // DirectSound output test
                     let mut play_cursor = 0;
@@ -577,7 +560,9 @@ fn main() -> Result<()> {
                         dimension.0,
                         dimension.1,
                     );
-                    ReleaseDC(window, device_context);
+
+                    // This makes the window not live update, have to look into how this works
+                    // ReleaseDC(window, device_context);
 
                     let end_cycle_count = _rdtsc();
 
