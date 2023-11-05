@@ -1,6 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use std::{env, ffi::c_void, mem::size_of};
+use std::{arch::x86_64::_rdtsc, env, f32::consts::PI, ffi::c_void, mem::size_of};
 use windows::{
     core::*,
     Win32::{
@@ -13,8 +13,8 @@ use windows::{
             },
             WAVEFORMATEX, WAVE_FORMAT_PCM,
         },
-        System::LibraryLoader::*,
-        System::Memory::*,
+        System::{LibraryLoader::*, Performance::QueryPerformanceCounter},
+        System::{Memory::*, Performance::QueryPerformanceFrequency},
         UI::{
             Input::XboxController::{
                 XInputGetState, XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_B, XINPUT_GAMEPAD_BACK,
@@ -32,11 +32,10 @@ use windows::{
 static mut RUNNING: bool = true;
 static mut DIRECT_SOUND: Option<IDirectSound8> = None;
 static mut SECONDARY_BUFFER: Option<IDirectSoundBuffer> = None;
-
 static mut X_OFFSET: i32 = 0;
 static mut Y_OFFSET: i32 = 0;
 
-static mut GLOBAL_BACK_BUFFER: Win32OffscreenBuffer = Win32OffscreenBuffer {
+static mut GLOBAL_BACK_BUFFER: Win32OffScreenBuffer = Win32OffScreenBuffer {
     width: 0,
     height: 0,
     memory: std::ptr::null_mut(),
@@ -66,7 +65,7 @@ static mut GLOBAL_BACK_BUFFER: Win32OffscreenBuffer = Win32OffscreenBuffer {
 };
 
 #[derive(Clone, Copy)]
-pub struct Win32OffscreenBuffer {
+pub struct Win32OffScreenBuffer {
     width: i32,
     height: i32,
     memory: *mut c_void,
@@ -78,6 +77,91 @@ pub struct Win32OffscreenBuffer {
 pub struct Win32WindowDimension {
     pub width: i32,
     pub height: i32,
+}
+
+#[derive(Default, Clone)]
+pub struct Win32SoundOutput {
+    samples_per_second: u32,
+    tone_hz: u32,
+    tone_volume: f32,
+    running_sample_index: u32,
+    wave_period: u32,
+    bytes_per_sample: u32,
+    secondary_buffer_size: u32,
+}
+
+pub fn win32_fill_sound_buffer(
+    sound_output: &mut Win32SoundOutput,
+    byte_to_lock: u32,
+    bytes_to_write: u32,
+) {
+    let mut region1 = std::ptr::null_mut();
+    let mut region1_size = 0;
+    let mut region2 = std::ptr::null_mut();
+    let mut region2_size = 0;
+    unsafe {
+        match SECONDARY_BUFFER.as_ref().unwrap().Lock(
+            byte_to_lock,
+            bytes_to_write,
+            &mut region1,
+            &mut region1_size,
+            Some(&mut region2),
+            Some(&mut region2_size),
+            0,
+        ) {
+            Ok(_) => {}
+            Err(e) => {
+                dbg!(e);
+            }
+        }
+    }
+
+    let mut sample_out = region1 as *mut i16;
+    let region1_sample_count = region1_size / sound_output.bytes_per_sample;
+
+    for _ in 0..region1_sample_count {
+        let t: f32 =
+            2.0 * PI * sound_output.running_sample_index as f32 / sound_output.wave_period as f32;
+        let sine_value: f32 = t.sin();
+        let sample_value: i16 = (sine_value * sound_output.tone_volume) as i16;
+        unsafe {
+            *sample_out = sample_value;
+            sample_out = sample_out.add(1);
+            *sample_out = sample_value;
+            sample_out = sample_out.add(1);
+            sound_output.running_sample_index += 1;
+        }
+    }
+
+    sample_out = region2 as *mut i16;
+    let region2_sample_count = region2_size / sound_output.bytes_per_sample;
+
+    for _ in 0..region2_sample_count {
+        let t: f32 =
+            2.0 * PI * sound_output.running_sample_index as f32 / sound_output.wave_period as f32;
+        let sine_value: f32 = t.sin();
+        let sample_value: i16 = (sine_value * sound_output.tone_volume) as i16;
+        unsafe {
+            *sample_out = sample_value;
+            sample_out = sample_out.add(1);
+            *sample_out = sample_value;
+            sample_out = sample_out.add(1);
+            sound_output.running_sample_index += 1;
+        }
+    }
+    unsafe {
+        match SECONDARY_BUFFER.as_ref().unwrap().Unlock(
+            region1,
+            region1_size,
+            Some(region2),
+            region2_size,
+        ) {
+            Ok(_) => {}
+            Err(e) => {
+                dbg!(e);
+            }
+        }
+    }
 }
 
 //DirectSound api (very old)
@@ -101,7 +185,7 @@ pub fn win32_init_d_sound(window: HWND, samples_per_second: u32, buffer_size: u3
         match DirectSoundCreate8(Some(std::ptr::null()), &mut DIRECT_SOUND, None) {
             Ok(_) => {}
             Err(e) => {
-                println!("DirectSoundCreate() Error: {}", e);
+                dbg!(e);
             }
         };
         match DIRECT_SOUND
@@ -111,7 +195,7 @@ pub fn win32_init_d_sound(window: HWND, samples_per_second: u32, buffer_size: u3
         {
             Ok(_) => {}
             Err(e) => {
-                println!("SetCooperativeLevel() Error: {}", e);
+                dbg!(e);
             }
         }
     }
@@ -132,13 +216,13 @@ pub fn win32_init_d_sound(window: HWND, samples_per_second: u32, buffer_size: u3
         ) {
             Ok(_) => {}
             Err(e) => {
-                println!("CreateSoundBuffer() Error: {}", e);
+                dbg!(e);
             }
         }
         match primary_buffer.unwrap().SetFormat(&wave_format) {
             Ok(_) => {}
             Err(e) => {
-                println!("SetFormat() Error: {}", e);
+                dbg!(e);
             }
         };
     }
@@ -151,6 +235,7 @@ pub fn win32_init_d_sound(window: HWND, samples_per_second: u32, buffer_size: u3
     buffer_description.dwFlags = 0;
     buffer_description.dwBufferBytes = buffer_size;
     buffer_description.lpwfxFormat = &mut wave_format;
+
     unsafe {
         match DIRECT_SOUND.as_ref().unwrap().CreateSoundBuffer(
             &buffer_description,
@@ -159,7 +244,7 @@ pub fn win32_init_d_sound(window: HWND, samples_per_second: u32, buffer_size: u3
         ) {
             Ok(_) => {}
             Err(e) => {
-                println!("CreateSoundBuffer() Error: {}", e);
+                dbg!(e);
             }
         }
         // Start playing
@@ -179,7 +264,7 @@ pub fn win32_get_window_dimension(window: HWND) -> Result<(i32, i32)> {
     Ok((width, height))
 }
 
-pub fn render_gradient(buffer: &Win32OffscreenBuffer, blue_offset: i32, green_offset: i32) {
+pub fn render_gradient(buffer: &Win32OffScreenBuffer, blue_offset: i32, green_offset: i32) {
     unsafe {
         // Draw bitmap to window.
         let mut row: *mut u8 = buffer.memory.cast();
@@ -205,7 +290,7 @@ pub fn render_gradient(buffer: &Win32OffscreenBuffer, blue_offset: i32, green_of
     }
 }
 
-pub fn win32_resize_db_section(buffer: &mut Win32OffscreenBuffer, width: i32, height: i32) {
+pub fn win32_resize_db_section(buffer: &mut Win32OffScreenBuffer, width: i32, height: i32) {
     unsafe {
         if !buffer.memory.is_null() {
             VirtualFree(buffer.memory as *mut c_void, 0, MEM_RELEASE).unwrap_or_default();
@@ -239,7 +324,7 @@ pub fn win32_resize_db_section(buffer: &mut Win32OffscreenBuffer, width: i32, he
 
 pub fn win32_display_buffer_in_window(
     device_context: HDC,
-    buffer: &Win32OffscreenBuffer,
+    buffer: &Win32OffScreenBuffer,
     window_width: i32,
     window_height: i32,
 ) {
@@ -310,6 +395,7 @@ pub unsafe extern "system" fn win32_main_window_callback(
                             X_OFFSET += 1;
                         }
                         WPARAM(0x73) => {
+                            //F4 key
                             let alt_key_was_down = (lparam.0 & (1 << 29)) != 0;
                             if alt_key_was_down {
                                 RUNNING = false;
@@ -343,9 +429,12 @@ pub unsafe extern "system" fn win32_main_window_callback(
 fn main() -> Result<()> {
     env::set_var("RUST_BACKTRACE", "0");
 
-    let mut window_class = WNDCLASSW::default();
-
     unsafe {
+        let mut perf_counter_freq: i64 = 0;
+        QueryPerformanceFrequency(&mut perf_counter_freq).unwrap();
+
+        let mut window_class = WNDCLASSW::default();
+
         win32_resize_db_section(&mut GLOBAL_BACK_BUFFER, 1280, 720);
         window_class.style = CS_HREDRAW | CS_VREDRAW;
         window_class.lpfnWndProc = Some(win32_main_window_callback);
@@ -373,16 +462,28 @@ fn main() -> Result<()> {
                 let device_context = GetDC(window);
 
                 // Sound test
-                let samples_per_second = 48000;
-                let tone_hz = 256;
-                let tone_volume = 200;
-                let mut running_sample_index = 0;
-                let square_wave_period = samples_per_second / tone_hz;
-                let half_square_wave_period = square_wave_period / 2;
-                let bytes_per_sample = size_of::<i16>() as u32 * 2;
-                let secondary_buffer_size = samples_per_second * bytes_per_sample;
+                let mut sound_output = Win32SoundOutput::default();
+                sound_output.samples_per_second = 48000;
+                sound_output.tone_hz = 256;
+                sound_output.tone_volume = 200.0;
+                sound_output.running_sample_index = 0;
+                sound_output.wave_period = sound_output.samples_per_second / sound_output.tone_hz;
+                sound_output.bytes_per_sample = size_of::<i16>() as u32 * 2;
+                sound_output.secondary_buffer_size =
+                    sound_output.samples_per_second * sound_output.bytes_per_sample;
 
-                win32_init_d_sound(window, samples_per_second, secondary_buffer_size).unwrap();
+                win32_init_d_sound(
+                    window,
+                    sound_output.samples_per_second,
+                    sound_output.secondary_buffer_size,
+                )
+                .unwrap();
+
+                win32_fill_sound_buffer(
+                    &mut sound_output.clone(),
+                    0,
+                    sound_output.secondary_buffer_size,
+                );
 
                 match SECONDARY_BUFFER
                     .as_ref()
@@ -391,9 +492,13 @@ fn main() -> Result<()> {
                 {
                     Ok(_) => {}
                     Err(e) => {
-                        println!("Play() Error: {}", e);
+                        dbg!(e);
                     }
                 }
+
+                let mut last_counter: i64 = 0;
+                QueryPerformanceCounter(&mut last_counter).unwrap();
+                let mut last_cycle_count = _rdtsc();
 
                 while RUNNING {
                     while (PeekMessageW(&mut msg, HWND(0), 0, 0, PM_REMOVE)).into() {
@@ -445,87 +550,25 @@ fn main() -> Result<()> {
                     {
                         Ok(_) => {}
                         Err(e) => {
-                            println!("GetCurrentPosition() Error: {}", e);
+                            dbg!(e);
                         }
                     }
-                    {
-                        let byte_to_lock =
-                            (running_sample_index * bytes_per_sample) % secondary_buffer_size;
-                        let mut bytes_to_write;
-                        if byte_to_lock > play_cursor {
-                            bytes_to_write = secondary_buffer_size - byte_to_lock;
-                            bytes_to_write += play_cursor;
-                        } else {
-                            bytes_to_write = play_cursor - byte_to_lock;
-                        }
-                        let mut region1 = std::ptr::null_mut();
-                        let mut region1_size = 0;
-                        let mut region2 = std::ptr::null_mut();
-                        let mut region2_size = 0;
 
-                        // println!("Byte to lock: {:?}\n bytes_to_write: {:?}\n region1: {:?}\n region1_size: {:?}\n region2: {:?}\n region2_size {:?}\n", byte_to_lock, bytes_to_write, region1, region1_size, region2, region2_size);
-                        match SECONDARY_BUFFER.as_ref().unwrap().Lock(
-                            byte_to_lock,
-                            bytes_to_write,
-                            &mut region1,
-                            &mut region1_size,
-                            Some(&mut region2),
-                            Some(&mut region2_size),
-                            0,
-                        ) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                println!("Lock() Error: {}", e);
-                            }
-                        }
-
-                        // println!("Byte to lock: {:?}\n bytes_to_write: {:?}\n region1: {:?}\n region1_size: {:?}\n region2: {:?}\n region2_size {:?}\n", byte_to_lock, bytes_to_write, region1, region1_size, region2, region2_size);
-
-                        let mut sample_out = region1 as *mut i16;
-                        let region1_sample_count = region1_size / bytes_per_sample;
-
-                        for _ in 0..region1_sample_count {
-                            let sample_value: i16;
-                            if ((running_sample_index / half_square_wave_period) % 2) == 0 {
-                                sample_value = tone_volume;
-                            } else {
-                                sample_value = -tone_volume;
-                            }
-                            *sample_out = sample_value;
-                            sample_out = sample_out.add(1);
-                            *sample_out = sample_value;
-                            sample_out = sample_out.add(1);
-                            running_sample_index += 1;
-                        }
-
-                        sample_out = region2 as *mut i16;
-                        let region2_sample_count = region2_size / bytes_per_sample;
-
-                        for _ in 0..region2_sample_count {
-                            let sample_value: i16;
-                            if ((running_sample_index / half_square_wave_period) % 2) == 0 {
-                                sample_value = tone_volume;
-                            } else {
-                                sample_value = -tone_volume;
-                            }
-                            *sample_out = sample_value;
-                            sample_out = sample_out.add(1);
-                            *sample_out = sample_value;
-                            sample_out = sample_out.add(1);
-                            running_sample_index += 1;
-                        }
-                        match SECONDARY_BUFFER.as_ref().unwrap().Unlock(
-                            region1,
-                            region1_size,
-                            Some(region2),
-                            region2_size,
-                        ) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                println!("Unlock() Error: {}", e);
-                            }
-                        }
+                    let byte_to_lock = (sound_output.running_sample_index
+                        * sound_output.bytes_per_sample)
+                        % sound_output.secondary_buffer_size;
+                    let mut bytes_to_write;
+                    if byte_to_lock == play_cursor {
+                        bytes_to_write = 0;
+                    } else if byte_to_lock > play_cursor {
+                        bytes_to_write = sound_output.secondary_buffer_size - byte_to_lock;
+                        bytes_to_write += play_cursor;
+                    } else {
+                        bytes_to_write = play_cursor - byte_to_lock;
                     }
+
+                    win32_fill_sound_buffer(&mut sound_output, byte_to_lock, bytes_to_write);
+
                     let dimension = win32_get_window_dimension(window).unwrap();
 
                     win32_display_buffer_in_window(
@@ -535,9 +578,31 @@ fn main() -> Result<()> {
                         dimension.1,
                     );
                     ReleaseDC(window, device_context);
+
+                    let end_cycle_count = _rdtsc();
+
+                    let mut end_counter: i64 = 0;
+                    QueryPerformanceCounter(&mut end_counter).unwrap();
+
+                    let cycles_elapsed = end_cycle_count - last_cycle_count;
+                    let counter_elapsed: i64 = end_counter - last_counter;
+                    let millis_per_frame = (1000 * counter_elapsed) / perf_counter_freq;
+                    let fps = perf_counter_freq / counter_elapsed;
+                    let megac_per_frame = cycles_elapsed / (1000 * 1000);
+
+                    let timer_output = format!(
+                        "{}ms/f, {}f/s, {}mc/f",
+                        millis_per_frame, fps, megac_per_frame
+                    );
+
+                    dbg!(timer_output);
+
+                    last_counter = end_counter;
+                    last_cycle_count = end_cycle_count;
                 }
             } else {
                 //Logging
+                dbg!(window);
             }
         }
     }
