@@ -28,7 +28,7 @@ use windows::{
     },
 };
 
-use crate::gaming::gaming::GameOffscreenBuffer;
+use crate::gaming::gaming::{GameOffscreenBuffer, GameSoundOutputBuffer};
 
 //Global for now, change later
 static mut RUNNING: bool = true;
@@ -90,12 +90,70 @@ pub struct Win32SoundOutput {
     wave_period: u32,
     bytes_per_sample: u32,
     secondary_buffer_size: u32,
+    latency_sample_count: u32,
+}
+
+pub fn win32_clear_sound_buffer(sound_output: &Win32SoundOutput) {
+    let mut region1 = std::ptr::null_mut();
+    let mut region1_size = 0;
+    let mut region2 = std::ptr::null_mut();
+    let mut region2_size = 0;
+
+    unsafe {
+        match SECONDARY_BUFFER.as_ref().unwrap().Lock(
+            0,
+            sound_output.secondary_buffer_size,
+            &mut region1,
+            &mut region1_size,
+            Some(&mut region2),
+            Some(&mut region2_size),
+            0,
+        ) {
+            Ok(_) => {}
+            Err(e) => {
+                dbg!(e);
+            }
+        }
+    }
+
+    let mut dest_sample = region1 as *mut u8;
+
+    for _ in 0..region1_size {
+        unsafe {
+            *dest_sample = 0;
+            dest_sample = dest_sample.add(1);
+        }
+    }
+
+    dest_sample = region2 as *mut u8;
+
+    for _ in 0..region2_size {
+        unsafe {
+            *dest_sample = 0;
+            dest_sample = dest_sample.add(1);
+        }
+    }
+
+    unsafe {
+        match SECONDARY_BUFFER.as_ref().unwrap().Unlock(
+            region1,
+            region1_size,
+            Some(region2),
+            region2_size,
+        ) {
+            Ok(_) => {}
+            Err(e) => {
+                dbg!(e);
+            }
+        }
+    }
 }
 
 pub fn win32_fill_sound_buffer(
     sound_output: &mut Win32SoundOutput,
     byte_to_lock: u32,
     bytes_to_write: u32,
+    source_buffer: GameSoundOutputBuffer,
 ) {
     let mut region1 = std::ptr::null_mut();
     let mut region1_size = 0;
@@ -119,36 +177,33 @@ pub fn win32_fill_sound_buffer(
         }
     }
 
-    let mut sample_out = region1 as *mut i16;
     let region1_sample_count = region1_size / sound_output.bytes_per_sample;
+    let mut dest_sample = region1 as *mut i16;
+    let mut source_sample = source_buffer.samples;
 
     for _ in 0..region1_sample_count {
-        let t: f32 =
-            2.0 * PI * sound_output.running_sample_index as f32 / sound_output.wave_period as f32;
-        let sine_value: f32 = t.sin();
-        let sample_value: i16 = (sine_value * sound_output.tone_volume) as i16;
         unsafe {
-            *sample_out = sample_value;
-            sample_out = sample_out.add(1);
-            *sample_out = sample_value;
-            sample_out = sample_out.add(1);
+            *dest_sample = *source_sample;
+            source_sample = source_sample.add(1);
+            dest_sample = dest_sample.add(1);
+            *dest_sample = *source_sample;
+            source_sample = source_sample.add(1);
+            dest_sample = dest_sample.add(1);
             sound_output.running_sample_index += 1;
         }
     }
 
-    sample_out = region2 as *mut i16;
+    dest_sample = region2 as *mut i16;
     let region2_sample_count = region2_size / sound_output.bytes_per_sample;
 
     for _ in 0..region2_sample_count {
-        let t: f32 =
-            2.0 * PI * sound_output.running_sample_index as f32 / sound_output.wave_period as f32;
-        let sine_value: f32 = t.sin();
-        let sample_value: i16 = (sine_value * sound_output.tone_volume) as i16;
         unsafe {
-            *sample_out = sample_value;
-            sample_out = sample_out.add(1);
-            *sample_out = sample_value;
-            sample_out = sample_out.add(1);
+            *dest_sample = *source_sample;
+            source_sample = source_sample.add(1);
+            dest_sample = dest_sample.add(1);
+            *dest_sample = *source_sample;
+            source_sample = source_sample.add(1);
+            dest_sample = dest_sample.add(1);
             sound_output.running_sample_index += 1;
         }
     }
@@ -448,6 +503,7 @@ fn main() -> Result<()> {
                 sound_output.bytes_per_sample = size_of::<i16>() as u32 * 2;
                 sound_output.secondary_buffer_size =
                     sound_output.samples_per_second * sound_output.bytes_per_sample;
+                sound_output.latency_sample_count = sound_output.samples_per_second / 15;
 
                 win32_init_d_sound(
                     window,
@@ -456,11 +512,7 @@ fn main() -> Result<()> {
                 )
                 .unwrap();
 
-                win32_fill_sound_buffer(
-                    &mut sound_output.clone(),
-                    0,
-                    sound_output.secondary_buffer_size,
-                );
+                win32_clear_sound_buffer(&sound_output);
 
                 match SECONDARY_BUFFER
                     .as_ref()
@@ -472,6 +524,15 @@ fn main() -> Result<()> {
                         dbg!(e);
                     }
                 }
+
+                RUNNING = true;
+
+                let samples = VirtualAlloc(
+                    Some(std::ptr::null()),
+                    sound_output.secondary_buffer_size as usize,
+                    MEM_COMMIT,
+                    PAGE_READWRITE,
+                );
 
                 let mut last_counter: i64 = 0;
                 QueryPerformanceCounter(&mut last_counter).unwrap();
@@ -515,42 +576,66 @@ fn main() -> Result<()> {
                         }
                     }
 
+                    // DirectSound output test
+                    let mut byte_to_lock = 0;
+                    let target_cursor;
+                    let mut bytes_to_write = 0;
+                    let mut play_cursor = 0;
+                    let mut write_cursor = 0;
+                    let mut sound_is_valid = false;
+                    match SECONDARY_BUFFER
+                        .as_ref()
+                        .unwrap()
+                        .GetCurrentPosition(Some(&mut play_cursor), Some(&mut write_cursor))
+                    {
+                        Ok(_) => {
+                            sound_is_valid = true;
+                            byte_to_lock = (sound_output.running_sample_index
+                                * sound_output.bytes_per_sample)
+                                % sound_output.secondary_buffer_size;
+
+                            target_cursor = (play_cursor
+                                + (sound_output.latency_sample_count
+                                    * sound_output.bytes_per_sample))
+                                % sound_output.secondary_buffer_size;
+                            if byte_to_lock > target_cursor {
+                                bytes_to_write = sound_output.secondary_buffer_size - byte_to_lock;
+                                bytes_to_write += target_cursor;
+                            } else {
+                                bytes_to_write = target_cursor - byte_to_lock;
+                            }
+                        }
+                        Err(e) => {
+                            dbg!(e);
+                        }
+                    }
+
+                    let mut sound_buffer = GameSoundOutputBuffer::default();
+                    sound_buffer.samples_per_second = sound_output.samples_per_second;
+                    sound_buffer.sample_count = bytes_to_write / sound_output.bytes_per_sample;
+                    sound_buffer.samples = samples as *mut i16;
+
                     let mut buffer = GameOffscreenBuffer::default();
                     buffer.memory = GLOBAL_BACK_BUFFER.memory;
                     buffer.width = GLOBAL_BACK_BUFFER.width;
                     buffer.height = GLOBAL_BACK_BUFFER.height;
                     buffer.pitch = GLOBAL_BACK_BUFFER.pitch;
 
-                    gaming::gaming::game_update_and_render(&buffer, X_OFFSET, Y_OFFSET);
+                    gaming::gaming::game_update_and_render(
+                        &buffer,
+                        X_OFFSET,
+                        Y_OFFSET,
+                        &sound_buffer,
+                    );
 
-                    // DirectSound output test
-                    let mut play_cursor = 0;
-                    let mut write_cursor = 0;
-                    match SECONDARY_BUFFER
-                        .as_ref()
-                        .unwrap()
-                        .GetCurrentPosition(Some(&mut play_cursor), Some(&mut write_cursor))
-                    {
-                        Ok(_) => {}
-                        Err(e) => {
-                            dbg!(e);
-                        }
+                    if sound_is_valid {
+                        win32_fill_sound_buffer(
+                            &mut sound_output,
+                            byte_to_lock,
+                            bytes_to_write,
+                            sound_buffer,
+                        );
                     }
-
-                    let byte_to_lock = (sound_output.running_sample_index
-                        * sound_output.bytes_per_sample)
-                        % sound_output.secondary_buffer_size;
-                    let mut bytes_to_write;
-                    if byte_to_lock == play_cursor {
-                        bytes_to_write = 0;
-                    } else if byte_to_lock > play_cursor {
-                        bytes_to_write = sound_output.secondary_buffer_size - byte_to_lock;
-                        bytes_to_write += play_cursor;
-                    } else {
-                        bytes_to_write = play_cursor - byte_to_lock;
-                    }
-
-                    win32_fill_sound_buffer(&mut sound_output, byte_to_lock, bytes_to_write);
 
                     let dimension = win32_get_window_dimension(window).unwrap();
 
