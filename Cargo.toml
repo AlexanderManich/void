@@ -5,6 +5,12 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+# Features in default are enabled, others are disabled.
+default = ["gaming_slow", "gaming_internal"]
+gaming_internal = []
+gaming_slow = []
+
 [dependencies]
 
 [dependencies.windows]
