@@ -2,7 +2,7 @@
 mod gaming_engine;
 mod macros;
 
-use std::{arch::x86_64::_rdtsc, env, ffi::c_void, mem::size_of, ptr::swap};
+use std::{arch::x86_64::_rdtsc, ffi::c_void, mem::size_of, ptr::swap};
 use windows::{
     core::*,
     Win32::{
@@ -10,8 +10,8 @@ use windows::{
         Graphics::Gdi::*,
         Media::Audio::{DirectSound::*, WAVEFORMATEX, WAVE_FORMAT_PCM},
         Storage::FileSystem::{
-            CreateFileW, GetFileSizeEx, ReadFile, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ,
-            OPEN_EXISTING,
+            CreateFileW, GetFileSizeEx, ReadFile, WriteFile, CREATE_ALWAYS,
+            FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_NONE, FILE_SHARE_READ, OPEN_EXISTING,
         },
         System::{LibraryLoader::*, Memory::*, Performance::*},
         UI::{Input::XboxController::*, WindowsAndMessaging::*},
@@ -84,9 +84,21 @@ fn safe_truncateu64(value: u64) -> u32 {
     value as u32
 }
 
-pub fn debug_platform_read_entire_file(filename: PCWSTR) -> Result<*mut c_void> {
+#[cfg(feature = "gaming_internal")]
+pub struct DebugReadFileResult {
+    contents: *mut c_void,
+    contents_size: u32,
+}
+
+impl Default for DebugReadFileResult {
+    fn default() -> Self {
+        unsafe { ::core::mem::zeroed() }
+    }
+}
+
+pub fn debug_platform_read_entire_file(filename: PCWSTR) -> Result<DebugReadFileResult> {
     unsafe {
-        let mut result: *mut c_void;
+        let mut result: DebugReadFileResult = Default::default();
         let file_handle = CreateFileW(
             filename,
             GENERIC_READ.0,
@@ -100,16 +112,16 @@ pub fn debug_platform_read_entire_file(filename: PCWSTR) -> Result<*mut c_void> 
         let mut file_size: i64 = 0;
         GetFileSizeEx(file_handle, &mut file_size)?;
         let file_size32 = safe_truncateu64(file_size as u64);
-        result = VirtualAlloc(
+        result.contents = VirtualAlloc(
             None,
             file_size32 as usize,
             MEM_RESERVE | MEM_COMMIT,
             PAGE_READWRITE,
         );
 
-        let read_buffer = std::mem::transmute::<*mut c_void, &mut u8>(result);
+        let read_buffer = std::mem::transmute::<*mut c_void, &mut u8>(result.contents);
 
-        if !result.is_null() {
+        if !result.contents.is_null() {
             let mut bytes_read: u32 = 0;
             match ReadFile(
                 file_handle,
@@ -122,12 +134,12 @@ pub fn debug_platform_read_entire_file(filename: PCWSTR) -> Result<*mut c_void> 
             ) {
                 Ok(()) => {
                     debug_assert!(bytes_read == file_size32);
-                    // File is read successfully, dont know if something should happen here
+                    result.contents_size = file_size32;
                 }
                 Err(e) => {
-                    dbg!(debug_platform_free_file_memory(result));
+                    dbg!(debug_platform_free_file_memory(result.contents));
                     dbg!(e);
-                    result = std::ptr::null_mut();
+                    result.contents = std::ptr::null_mut();
                 }
             }
         }
@@ -147,8 +159,47 @@ pub fn debug_platform_free_file_memory(memory: *mut c_void) {
     }
 }
 
-pub fn debug_platform_write_entire_file(filename: *const u8, memory_size: u32) -> bool {
-    todo!()
+pub fn debug_platform_write_entire_file(
+    filename: PCWSTR,
+    memory_size: u32,
+    memory: *mut c_void,
+) -> Result<()> {
+    unsafe {
+        let file_handle = CreateFileW(
+            filename,
+            GENERIC_WRITE.0,
+            FILE_SHARE_NONE,
+            None,
+            CREATE_ALWAYS,
+            FILE_FLAGS_AND_ATTRIBUTES(0),
+            HANDLE(0),
+        )?;
+
+        let write_buffer = std::mem::transmute::<*mut c_void, &mut u8>(memory);
+
+        let mut bytes_written: u32 = 0;
+        match WriteFile(
+            file_handle,
+            Some(std::slice::from_raw_parts_mut(
+                write_buffer,
+                memory_size as usize,
+            )),
+            Some(&mut bytes_written),
+            None,
+        ) {
+            Ok(()) => {
+                debug_assert!(bytes_written == memory_size);
+                // File is read successfully, dont know if something should happen here
+            }
+            Err(e) => {
+                dbg!(e);
+            }
+        }
+
+        CloseHandle(file_handle)?;
+
+        Ok(())
+    }
 }
 
 pub fn win32_process_xinput_digital_button(
@@ -520,8 +571,6 @@ pub unsafe extern "system" fn win32_main_window_callback(
     }
 }
 fn main() -> Result<()> {
-    // env::set_var("RUST_BACKTRACE", "0");
-
     unsafe {
         let mut perf_counter_freq: i64 = 0;
         QueryPerformanceFrequency(&mut perf_counter_freq).unwrap();
@@ -597,7 +646,7 @@ fn main() -> Result<()> {
 
                 let mut game_memory = GameMemory::default();
                 game_memory.permanent_storage_size = mega_bytes!(64);
-                game_memory.transient_storage_size = giga_bytes!(4);
+                game_memory.transient_storage_size = giga_bytes!(1);
 
                 let total_size =
                     game_memory.permanent_storage_size + game_memory.transient_storage_size;

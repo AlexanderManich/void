@@ -1,8 +1,11 @@
 use std::{f32::consts::PI, ffi::c_void, mem::size_of};
 
-use windows::core::{w, HSTRING, PCWSTR};
+use windows::core::{w, PCWSTR};
 
-use crate::{debug_platform_free_file_memory, debug_platform_read_entire_file};
+use crate::{
+    debug_platform_free_file_memory, debug_platform_read_entire_file,
+    debug_platform_write_entire_file,
+};
 pub struct GameOffscreenBuffer {
     pub width: i32,
     pub height: i32,
@@ -155,10 +158,19 @@ pub fn game_update_and_render(
             {
                 // TODO: File path of THIS file right now. change to something idk
                 let filename = file!().encode_utf16().chain([0u16]).collect::<Vec<u16>>();
-                let filename_test = PCWSTR(filename.as_ptr());
-                match debug_platform_read_entire_file(filename_test) {
-                    Ok(bitmap_memory) => {
-                        debug_platform_free_file_memory(bitmap_memory);
+                let filename_pcwstr = PCWSTR(filename.as_ptr());
+                // let filename_test = PCWSTR(filename.as_ptr());
+                match debug_platform_read_entire_file(filename_pcwstr) {
+                    Ok(file) => {
+                        debug_platform_write_entire_file(
+                            w!("src\\test.out"),
+                            file.contents_size,
+                            file.contents,
+                        )
+                        .unwrap_or_else(|e| {
+                            dbg!(e);
+                        });
+                        debug_platform_free_file_memory(file.contents);
                     }
                     Err(e) => {
                         dbg!(e);
@@ -172,7 +184,7 @@ pub fn game_update_and_render(
 
         let input0 = &input.controllers[0];
         if input0.is_analog {
-            (*game_state).blue_offset = (4.0 * input0.end_x) as i32;
+            (*game_state).blue_offset += (4.0 * input0.end_x) as i32;
             (*game_state).tone_hz = 256 + ((128.0 * input0.end_y) as u32);
         } else {
         }
