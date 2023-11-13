@@ -9,6 +9,10 @@ use windows::{
         Foundation::*,
         Graphics::Gdi::*,
         Media::Audio::{DirectSound::*, WAVEFORMATEX, WAVE_FORMAT_PCM},
+        Storage::FileSystem::{
+            CreateFileW, GetFileSizeEx, ReadFile, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ,
+            OPEN_EXISTING,
+        },
         System::{LibraryLoader::*, Memory::*, Performance::*},
         UI::{Input::XboxController::*, WindowsAndMessaging::*},
     },
@@ -74,6 +78,79 @@ pub struct Win32SoundOutput {
     latency_sample_count: u32,
 }
 
+#[inline]
+fn safe_truncateu64(value: u64) -> u32 {
+    debug_assert!(value <= u32::MAX.into());
+    value as u32
+}
+
+pub fn debug_platform_read_entire_file(filename: PCWSTR) -> Result<*mut c_void> {
+    unsafe {
+        let mut result: *mut c_void;
+        let file_handle = CreateFileW(
+            filename,
+            GENERIC_READ.0,
+            FILE_SHARE_READ,
+            None,
+            OPEN_EXISTING,
+            FILE_FLAGS_AND_ATTRIBUTES(0),
+            HANDLE(0),
+        )?;
+
+        let mut file_size: i64 = 0;
+        GetFileSizeEx(file_handle, &mut file_size)?;
+        let file_size32 = safe_truncateu64(file_size as u64);
+        result = VirtualAlloc(
+            None,
+            file_size32 as usize,
+            MEM_RESERVE | MEM_COMMIT,
+            PAGE_READWRITE,
+        );
+
+        let read_buffer = std::mem::transmute::<*mut c_void, &mut u8>(result);
+
+        if !result.is_null() {
+            let mut bytes_read: u32 = 0;
+            match ReadFile(
+                file_handle,
+                Some(std::slice::from_raw_parts_mut(
+                    read_buffer,
+                    file_size32 as usize,
+                )),
+                Some(&mut bytes_read),
+                None,
+            ) {
+                Ok(()) => {
+                    debug_assert!(bytes_read == file_size32);
+                    // File is read successfully, dont know if something should happen here
+                }
+                Err(e) => {
+                    dbg!(debug_platform_free_file_memory(result));
+                    dbg!(e);
+                    result = std::ptr::null_mut();
+                }
+            }
+        }
+        CloseHandle(file_handle)?;
+
+        Ok(result)
+    }
+}
+
+pub fn debug_platform_free_file_memory(memory: *mut c_void) {
+    if !memory.is_null() {
+        unsafe {
+            VirtualFree(memory, 0, MEM_RELEASE).unwrap_or_else(|e| {
+                dbg!(e);
+            });
+        }
+    }
+}
+
+pub fn debug_platform_write_entire_file(filename: *const u8, memory_size: u32) -> bool {
+    todo!()
+}
+
 pub fn win32_process_xinput_digital_button(
     x_input_button_state: XINPUT_GAMEPAD_BUTTON_FLAGS,
     old_state: GameButtonState,
@@ -90,9 +167,9 @@ pub fn win32_process_xinput_digital_button(
 }
 
 pub fn win32_clear_sound_buffer(sound_output: &Win32SoundOutput) {
-    let mut region1 = std::ptr::null_mut();
+    let mut region1: *mut c_void = std::ptr::null_mut();
     let mut region1_size = 0;
-    let mut region2 = std::ptr::null_mut();
+    let mut region2: *mut c_void = std::ptr::null_mut();
     let mut region2_size = 0;
 
     unsafe {
@@ -110,7 +187,6 @@ pub fn win32_clear_sound_buffer(sound_output: &Win32SoundOutput) {
             )
             .unwrap_or_else(|e| {
                 dbg!(e);
-                ()
             })
     }
 
@@ -139,7 +215,6 @@ pub fn win32_clear_sound_buffer(sound_output: &Win32SoundOutput) {
             .Unlock(region1, region1_size, Some(region2), region2_size)
             .unwrap_or_else(|e| {
                 dbg!(e);
-                ()
             });
     }
 }
@@ -156,6 +231,7 @@ pub fn win32_fill_sound_buffer(
     let mut region2_size = 0;
 
     unsafe {
+        // TODO: There is a bug here, where sometimes the parameters are not correct
         SECONDARY_BUFFER
             .as_ref()
             .unwrap()
@@ -170,8 +246,7 @@ pub fn win32_fill_sound_buffer(
             )
             .unwrap_or_else(|e| {
                 dbg!(e);
-                ()
-            })
+            });
     }
 
     let region1_sample_count = region1_size / sound_output.bytes_per_sample;
@@ -211,7 +286,6 @@ pub fn win32_fill_sound_buffer(
             .Unlock(region1, region1_size, Some(region2), region2_size)
             .unwrap_or_else(|e| {
                 dbg!(e);
-                ()
             })
     }
 }
@@ -236,7 +310,6 @@ pub fn win32_init_d_sound(window: HWND, samples_per_second: u32, buffer_size: u3
     unsafe {
         DirectSoundCreate8(None, &mut DIRECT_SOUND, None).unwrap_or_else(|e| {
             dbg!(e);
-            ()
         });
         DIRECT_SOUND
             .as_ref()
@@ -244,7 +317,6 @@ pub fn win32_init_d_sound(window: HWND, samples_per_second: u32, buffer_size: u3
             .SetCooperativeLevel(window, DSSCL_PRIORITY)
             .unwrap_or_else(|e| {
                 dbg!(e);
-                ()
             });
     }
 
@@ -263,14 +335,12 @@ pub fn win32_init_d_sound(window: HWND, samples_per_second: u32, buffer_size: u3
             .CreateSoundBuffer(&buffer_description, &mut primary_buffer, None)
             .unwrap_or_else(|e| {
                 dbg!(e);
-                ()
             });
         primary_buffer
             .unwrap()
             .SetFormat(&wave_format)
             .unwrap_or_else(|e| {
                 dbg!(e);
-                ()
             });
     }
 
@@ -290,7 +360,6 @@ pub fn win32_init_d_sound(window: HWND, samples_per_second: u32, buffer_size: u3
             .CreateSoundBuffer(&buffer_description, &mut SECONDARY_BUFFER, None)
             .unwrap_or_else(|e| {
                 dbg!(e);
-                ()
             });
         // Start playing
 
@@ -314,7 +383,6 @@ pub fn win32_resize_dib_section(buffer: &mut Win32OffscreenBuffer, width: i32, h
         if !buffer.memory.is_null() {
             VirtualFree(buffer.memory as *mut c_void, 0, MEM_RELEASE).unwrap_or_else(|e| {
                 dbg!(e);
-                ()
             });
         }
 
@@ -427,16 +495,20 @@ pub unsafe extern "system" fn win32_main_window_callback(
                 let paint = &mut PAINTSTRUCT::default();
                 let device_context = BeginPaint(window, paint);
 
-                let dimension = win32_get_window_dimension(window).unwrap_or_else(|e| {
-                    dbg!(e);
-                    Default::default()
-                });
-                win32_display_buffer_in_window(
-                    device_context,
-                    &GLOBAL_BACK_BUFFER,
-                    dimension.0,
-                    dimension.1,
-                );
+                match win32_get_window_dimension(window) {
+                    Ok(dimension) => {
+                        win32_display_buffer_in_window(
+                            device_context,
+                            &GLOBAL_BACK_BUFFER,
+                            dimension.0,
+                            dimension.1,
+                        );
+                    }
+                    Err(e) => {
+                        dbg!(e);
+                    }
+                }
+
                 EndPaint(window, paint);
             }
             _ => {
@@ -695,6 +767,10 @@ fn main() -> Result<()> {
                                     bytes_to_write += target_cursor;
                                 } else {
                                     bytes_to_write = target_cursor - byte_to_lock;
+                                    // TODO: Passing 0 to bytes to write throws an error. This is probably scuffed but it kinda works? idk
+                                    if bytes_to_write == 0 {
+                                        bytes_to_write = 1;
+                                    }
                                 }
                             }
                             Err(e) => {
@@ -757,7 +833,7 @@ fn main() -> Result<()> {
                             millis_per_frame, fps, megac_per_frame
                         );
 
-                        dbg!(timer_output);
+                        // dbg!(timer_output);
 
                         last_counter = end_counter;
                         last_cycle_count = end_cycle_count;

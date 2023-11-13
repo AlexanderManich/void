@@ -1,4 +1,8 @@
 use std::{f32::consts::PI, ffi::c_void, mem::size_of};
+
+use windows::core::{w, HSTRING, PCWSTR};
+
+use crate::{debug_platform_free_file_memory, debug_platform_read_entire_file};
 pub struct GameOffscreenBuffer {
     pub width: i32,
     pub height: i32,
@@ -147,8 +151,22 @@ pub fn game_update_and_render(
     unsafe {
         let game_state = memory.permanent_storage as *mut GameState;
         if !memory.is_initialized {
-            (*game_state).tone_hz = 256;
+            #[cfg(feature = "gaming_internal")]
+            {
+                // TODO: File path of THIS file right now. change to something idk
+                let filename = file!().encode_utf16().chain([0u16]).collect::<Vec<u16>>();
+                let filename_test = PCWSTR(filename.as_ptr());
+                match debug_platform_read_entire_file(filename_test) {
+                    Ok(bitmap_memory) => {
+                        debug_platform_free_file_memory(bitmap_memory);
+                    }
+                    Err(e) => {
+                        dbg!(e);
+                    }
+                };
+            }
 
+            (*game_state).tone_hz = 256;
             memory.is_initialized = true;
         }
 
