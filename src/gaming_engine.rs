@@ -68,6 +68,12 @@ pub struct GameControllerInput {
     pub button_state: GameButtonStateUnion,
 }
 
+impl Default for GameControllerInput {
+    fn default() -> Self {
+        unsafe { ::core::mem::zeroed() }
+    }
+}
+
 pub struct GameInput {
     pub controllers: [GameControllerInput; 4],
 }

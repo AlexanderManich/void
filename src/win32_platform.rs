@@ -92,6 +92,86 @@ impl Default for DebugReadFileResult {
     }
 }
 
+fn win32_process_pending_messages(keyboard_controller: &mut GameControllerInput) {
+    let mut msg = MSG::default();
+
+    unsafe {
+        while (PeekMessageW(&mut msg, HWND(0), 0, 0, PM_REMOVE)).into() {
+            match msg.message {
+                WM_QUIT => {
+                    RUNNING = false;
+                }
+                WM_SYSKEYDOWN | WM_SYSKEYUP | WM_KEYDOWN | WM_KEYUP => {
+                    let vk_code = msg.wParam;
+                    let was_down = (msg.lParam.0 & (1 << 30)) != 0;
+                    let is_down = (msg.lParam.0 & (1 << 31)) == 0;
+                    //Check prevents repeat key presses when holding key
+                    if was_down != is_down {
+                        match vk_code {
+                            WPARAM(0x57) => {
+                                //W key
+                            }
+                            WPARAM(0x41) => {
+                                //A key
+                            }
+                            WPARAM(0x53) => {
+                                //S key
+                            }
+                            WPARAM(0x44) => {
+                                //D key
+                            }
+                            WPARAM(0x26) => {
+                                //Up arrow
+                                win32_process_keyboard_message(
+                                    &mut keyboard_controller.button_state.concrete_buttons.up,
+                                    is_down,
+                                );
+                            }
+                            WPARAM(0x25) => {
+                                //Left arrow
+                                win32_process_keyboard_message(
+                                    &mut keyboard_controller.button_state.concrete_buttons.left,
+                                    is_down,
+                                );
+                            }
+                            WPARAM(0x28) => {
+                                //Down arrow
+                                win32_process_keyboard_message(
+                                    &mut keyboard_controller.button_state.concrete_buttons.down,
+                                    is_down,
+                                );
+                            }
+                            WPARAM(0x27) => {
+                                //Right arrow
+                                win32_process_keyboard_message(
+                                    &mut keyboard_controller.button_state.concrete_buttons.right,
+                                    is_down,
+                                );
+                            }
+                            WPARAM(0x1b) => {
+                                //Escape key
+                                RUNNING = false;
+                            }
+                            WPARAM(0x73) => {
+                                //F4 key
+                                let alt_key_was_down = (msg.lParam.0 & (1 << 29)) != 0;
+                                if alt_key_was_down {
+                                    RUNNING = false;
+                                }
+                            }
+                            WPARAM(_) => {}
+                        }
+                    }
+                }
+                _ => {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
+        }
+    }
+}
+
 pub fn debug_platform_read_entire_file(filename: PCWSTR) -> Result<DebugReadFileResult> {
     unsafe {
         let mut result: DebugReadFileResult = Default::default();
@@ -198,11 +278,17 @@ pub fn debug_platform_write_entire_file(
     }
 }
 
+fn win32_process_keyboard_message(new_state: &mut GameButtonState, is_down: bool) {
+    new_state.ended_down = is_down;
+
+    new_state.half_transition_count += 1;
+}
+
 pub fn win32_process_xinput_digital_button(
     x_input_button_state: XINPUT_GAMEPAD_BUTTON_FLAGS,
     old_state: GameButtonState,
     button_bit: XINPUT_GAMEPAD_BUTTON_FLAGS,
-    mut new_state: GameButtonState,
+    new_state: &mut GameButtonState,
 ) {
     new_state.ended_down = (x_input_button_state & button_bit) == button_bit;
 
@@ -509,34 +595,7 @@ pub unsafe extern "system" fn win32_main_window_callback(
                 // Called when window is opened?
             }
             WM_SYSKEYDOWN | WM_SYSKEYUP | WM_KEYDOWN | WM_KEYUP => {
-                let vk_code = wparam;
-                let was_down = (lparam.0 & (1 << 30)) != 0;
-                let is_down = (lparam.0 & (1 << 31)) == 0;
-                //Check prevents repeat key presses when holding key
-                // if was_down != is_down {
-                match vk_code {
-                    WPARAM(0x57) => {
-                        //W key
-                    }
-                    WPARAM(0x41) => {
-                        //A key
-                    }
-                    WPARAM(0x53) => {
-                        //S key
-                    }
-                    WPARAM(0x44) => {
-                        //D key
-                    }
-                    WPARAM(0x73) => {
-                        //F4 key
-                        let alt_key_was_down = (lparam.0 & (1 << 29)) != 0;
-                        if alt_key_was_down {
-                            RUNNING = false;
-                        }
-                    }
-                    WPARAM(_) => {}
-                }
-                // }
+                debug_assert!(false);
             }
             WM_PAINT => {
                 let paint = &mut PAINTSTRUCT::default();
@@ -658,9 +717,9 @@ pub fn win32_main() -> Result<()> {
                     .cast();
 
                 // TODO: I dont know if this semantically correct?
-                if samples != std::ptr::null_mut()
-                    && game_memory.permanent_storage != std::ptr::null_mut()
-                    && game_memory.transient_storage != std::ptr::null_mut()
+                if !samples.is_null()
+                    && !game_memory.permanent_storage.is_null()
+                    && !game_memory.transient_storage.is_null()
                 {
                     let mut input: [GameInput; 2] = [GameInput::default(), GameInput::default()];
                     let (new_input, old_input) = input.split_at_mut(1);
@@ -672,16 +731,10 @@ pub fn win32_main() -> Result<()> {
                     let mut last_cycle_count = _rdtsc();
 
                     while RUNNING {
-                        let mut msg = MSG::default();
+                        let keyboard_controller = &mut new_input.controllers[0];
+                        *keyboard_controller = Default::default();
 
-                        while (PeekMessageW(&mut msg, HWND(0), 0, 0, PM_REMOVE)).into() {
-                            if msg.message == WM_QUIT {
-                                RUNNING = false;
-                            }
-
-                            TranslateMessage(&msg);
-                            DispatchMessageW(&msg);
-                        }
+                        win32_process_pending_messages(keyboard_controller);
 
                         //CONTROLLER INPUT
                         //Should we poll this more frequently?
@@ -744,37 +797,40 @@ pub fn win32_main() -> Result<()> {
                                     pad.wButtons,
                                     old_controller.button_state.concrete_buttons.down,
                                     XINPUT_GAMEPAD_A,
-                                    new_controller.button_state.concrete_buttons.down,
+                                    &mut new_controller.button_state.concrete_buttons.down,
                                 );
                                 win32_process_xinput_digital_button(
                                     pad.wButtons,
                                     old_controller.button_state.concrete_buttons.right,
                                     XINPUT_GAMEPAD_B,
-                                    new_controller.button_state.concrete_buttons.right,
+                                    &mut new_controller.button_state.concrete_buttons.right,
                                 );
                                 win32_process_xinput_digital_button(
                                     pad.wButtons,
                                     old_controller.button_state.concrete_buttons.left,
                                     XINPUT_GAMEPAD_X,
-                                    new_controller.button_state.concrete_buttons.left,
+                                    &mut new_controller.button_state.concrete_buttons.left,
                                 );
                                 win32_process_xinput_digital_button(
                                     pad.wButtons,
                                     old_controller.button_state.concrete_buttons.up,
                                     XINPUT_GAMEPAD_Y,
-                                    new_controller.button_state.concrete_buttons.up,
+                                    &mut new_controller.button_state.concrete_buttons.up,
                                 );
                                 win32_process_xinput_digital_button(
                                     pad.wButtons,
                                     old_controller.button_state.concrete_buttons.left_shoulder,
                                     XINPUT_GAMEPAD_LEFT_SHOULDER,
-                                    new_controller.button_state.concrete_buttons.left_shoulder,
+                                    &mut new_controller.button_state.concrete_buttons.left_shoulder,
                                 );
                                 win32_process_xinput_digital_button(
                                     pad.wButtons,
                                     old_controller.button_state.concrete_buttons.right_shoulder,
                                     XINPUT_GAMEPAD_RIGHT_SHOULDER,
-                                    new_controller.button_state.concrete_buttons.right_shoulder,
+                                    &mut new_controller
+                                        .button_state
+                                        .concrete_buttons
+                                        .right_shoulder,
                                 );
 
                                 // let start = pad.wButtons & XINPUT_GAMEPAD_START;
