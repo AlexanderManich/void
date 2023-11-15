@@ -36,34 +36,35 @@ pub struct GameButtonState {
 }
 
 pub union GameButtonStateUnion {
-    pub buttons: [GameButtonState; 6],
+    pub buttons: [GameButtonState; 12],
     pub concrete_buttons: ConcreteGameButtonState,
 }
 
 #[derive(Copy, Clone)]
 pub struct ConcreteGameButtonState {
-    pub up: GameButtonState,
-    pub down: GameButtonState,
-    pub left: GameButtonState,
-    pub right: GameButtonState,
+    pub move_up: GameButtonState,
+    pub move_down: GameButtonState,
+    pub move_left: GameButtonState,
+    pub move_right: GameButtonState,
+
+    pub action_up: GameButtonState,
+    pub action_down: GameButtonState,
+    pub action_left: GameButtonState,
+    pub action_right: GameButtonState,
+
     pub left_shoulder: GameButtonState,
     pub right_shoulder: GameButtonState,
+
+    pub back: GameButtonState,
+    pub start: GameButtonState,
 }
 
 pub struct GameControllerInput {
     pub is_analog: bool,
+    pub is_connected: bool,
 
-    pub start_x: f32,
-    pub start_y: f32,
-
-    pub min_x: f32,
-    pub min_y: f32,
-
-    pub max_x: f32,
-    pub max_y: f32,
-
-    pub end_x: f32,
-    pub end_y: f32,
+    pub stick_average_x: f32,
+    pub stick_average_y: f32,
 
     pub button_state: GameButtonStateUnion,
 }
@@ -75,7 +76,13 @@ impl Default for GameControllerInput {
 }
 
 pub struct GameInput {
-    pub controllers: [GameControllerInput; 4],
+    pub controllers: [GameControllerInput; 5],
+}
+
+#[inline]
+pub fn get_controller(input: &mut GameInput, controller_index: usize) -> &mut GameControllerInput {
+    assert!(controller_index < input.controllers.len());
+    &mut input.controllers[controller_index]
 }
 
 impl Default for GameInput {
@@ -150,9 +157,13 @@ pub fn game_output_sound(sound_buffer: &GameSoundOutputBuffer, tone_hz: u32) {
 pub fn game_update_and_render(
     buffer: &GameOffscreenBuffer,
     sound_buffer: &GameSoundOutputBuffer,
-    input: &GameInput,
+    input: &mut GameInput,
     memory: &mut GameMemory,
 ) {
+    debug_assert!(
+        size_of::<ConcreteGameButtonState>() / size_of::<GameButtonState>()
+            == unsafe { input.controllers[0].button_state.buttons.len() }
+    );
     debug_assert!(size_of::<GameState>() <= memory.permanent_storage_size.try_into().unwrap());
 
     unsafe {
@@ -186,15 +197,39 @@ pub fn game_update_and_render(
             memory.is_initialized = true;
         }
 
-        let input0 = &input.controllers[0];
-        if input0.is_analog {
-            (*game_state).blue_offset += (4.0 * input0.end_x) as i32;
-            (*game_state).tone_hz = 256 + ((128.0 * input0.end_y) as u32);
-        } else {
-        }
+        for controller_index in 0..input.controllers.len() {
+            let controller = get_controller(input, controller_index);
+            if controller.is_analog {
+                (*game_state).blue_offset += (4.0 * controller.stick_average_x) as i32;
+                (*game_state).tone_hz = 256 + ((128.0 * controller.stick_average_y) as u32);
+            } else {
+                if controller
+                    .button_state
+                    .concrete_buttons
+                    .move_left
+                    .ended_down
+                {
+                    (*game_state).blue_offset -= 1;
+                }
 
-        if input0.button_state.concrete_buttons.down.ended_down {
-            (*game_state).green_offset += 1;
+                if controller
+                    .button_state
+                    .concrete_buttons
+                    .move_right
+                    .ended_down
+                {
+                    (*game_state).blue_offset += 1;
+                }
+            }
+
+            if controller
+                .button_state
+                .concrete_buttons
+                .action_down
+                .ended_down
+            {
+                (*game_state).green_offset += 1;
+            }
         }
 
         game_output_sound(sound_buffer, (*game_state).tone_hz);
