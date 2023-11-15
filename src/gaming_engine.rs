@@ -2,10 +2,8 @@ use std::{f32::consts::PI, ffi::c_void, mem::size_of};
 
 use windows::core::{w, PCWSTR};
 
-use crate::{
-    debug_platform_free_file_memory, debug_platform_read_entire_file,
-    debug_platform_write_entire_file,
-};
+use crate::win32_platform::*;
+
 pub struct GameOffscreenBuffer {
     pub width: i32,
     pub height: i32,
