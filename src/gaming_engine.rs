@@ -150,13 +150,22 @@ pub fn game_output_sound(sound_buffer: &GameSoundOutputBuffer, tone_hz: u32) {
             sample_out = sample_out.add(1);
 
             T_SINE += 2.0 * PI / wave_period as f32;
+            if T_SINE > 2.0 * PI {
+                T_SINE -= 2.0 * PI;
+            }
         }
+    }
+}
+
+pub fn game_get_sound_samples(memory: &mut GameMemory, sound_buffer: &GameSoundOutputBuffer) {
+    let game_state = memory.permanent_storage as *mut GameState;
+    unsafe {
+        game_output_sound(sound_buffer, (*game_state).tone_hz);
     }
 }
 
 pub fn game_update_and_render(
     buffer: &GameOffscreenBuffer,
-    sound_buffer: &GameSoundOutputBuffer,
     input: &mut GameInput,
     memory: &mut GameMemory,
 ) {
@@ -232,7 +241,6 @@ pub fn game_update_and_render(
             }
         }
 
-        game_output_sound(sound_buffer, (*game_state).tone_hz);
         render_gradient(
             buffer,
             (*game_state).blue_offset,
