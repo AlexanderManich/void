@@ -5,9 +5,13 @@ use windows::{
     Win32::{
         Foundation::*,
         Graphics::Gdi::*,
-        Media::Audio::{DirectSound::*, WAVEFORMATEX, WAVE_FORMAT_PCM},
+        Media::{
+            timeBeginPeriod,
+            Audio::{DirectSound::*, WAVEFORMATEX, WAVE_FORMAT_PCM},
+            TIMERR_NOERROR,
+        },
         Storage::FileSystem::*,
-        System::{LibraryLoader::*, Memory::*, Performance::*},
+        System::{LibraryLoader::*, Memory::*, Performance::*, Threading::Sleep},
         UI::{Input::XboxController::*, WindowsAndMessaging::*},
     },
 };
@@ -57,8 +61,21 @@ impl Default for DebugReadFileResult {
     }
 }
 
+#[derive(Copy, Clone)]
+struct Win32DebugTimeMarker {
+    play_cursor: u32,
+    write_cursor: u32,
+}
+
+impl Default for Win32DebugTimeMarker {
+    fn default() -> Self {
+        unsafe { ::core::mem::zeroed() }
+    }
+}
+
 //Global for now, change later
 static mut RUNNING: bool = true;
+static mut PERF_COUNTER_FREQ: i64 = 0;
 static mut DIRECT_SOUND: Option<IDirectSound8> = None;
 static mut SECONDARY_BUFFER: Option<IDirectSoundBuffer> = None;
 static mut GLOBAL_BACK_BUFFER: Win32OffscreenBuffer = Win32OffscreenBuffer {
@@ -90,12 +107,101 @@ static mut GLOBAL_BACK_BUFFER: Win32OffscreenBuffer = Win32OffscreenBuffer {
     bytes_per_pixel: 0,
 };
 
-fn win32_process_input_stick_value(value: i16, dead_zone_threshhold: u16) -> f32 {
+fn win32_debug_draw_vertical(
+    back_buffer: &Win32OffscreenBuffer,
+    x: i32,
+    top: i32,
+    bottom: i32,
+    color: u32,
+) {
+    let mut pixel = back_buffer.memory as *mut u8;
+    unsafe {
+        pixel = pixel.add((x * back_buffer.bytes_per_pixel) as usize);
+        pixel = pixel.add((top * back_buffer.pitch as i32) as usize);
+    }
+    for _y in top..bottom {
+        unsafe {
+            *(pixel as *mut u32) = color;
+            pixel = pixel.add(back_buffer.pitch);
+        }
+    }
+}
+
+#[inline]
+fn win32_draw_sound_buffer_marker(
+    back_buffer: &Win32OffscreenBuffer,
+    sound_output: &Win32SoundOutput,
+    c: f32,
+    pad_x: i32,
+    top: i32,
+    bottom: i32,
+    value: u32,
+    color: u32,
+) {
+    debug_assert!(value < sound_output.secondary_buffer_size);
+    let x_f32 = c * value as f32;
+    let x = x_f32 as i32 + pad_x;
+
+    win32_debug_draw_vertical(back_buffer, x, top, bottom, color);
+}
+
+fn win32_debug_sync_display(
+    back_buffer: &Win32OffscreenBuffer,
+    marker_count: usize,
+    markers: &[Win32DebugTimeMarker],
+    sound_output: &Win32SoundOutput,
+    target_seconds_per_frame: f32,
+) {
+    let pad_x = 16;
+    let pad_y = 16;
+
+    let top = pad_y;
+    let bottom = back_buffer.height - pad_y;
+
+    let c = (back_buffer.width - 2 * pad_x) as f32 / sound_output.secondary_buffer_size as f32;
+    (0..marker_count).for_each(|marker_index| {
+        let this_marker = markers[marker_index];
+        win32_draw_sound_buffer_marker(
+            back_buffer,
+            sound_output,
+            c,
+            pad_x,
+            top,
+            bottom,
+            this_marker.play_cursor,
+            0xFFFFFFFF,
+        );
+        win32_draw_sound_buffer_marker(
+            back_buffer,
+            sound_output,
+            c,
+            pad_x,
+            top,
+            bottom,
+            this_marker.write_cursor,
+            0xFFFF0000,
+        );
+    });
+}
+
+#[inline]
+fn win32_get_wall_clock() -> i64 {
+    let mut result = 0;
+    unsafe { QueryPerformanceCounter(&mut result).unwrap() }
+    result
+}
+
+#[inline]
+fn win32_get_seconds_elapsed(start: i64, end: i64) -> f32 {
+    (end - start) as f32 / unsafe { PERF_COUNTER_FREQ } as f32
+}
+
+fn win32_process_input_stick_value(value: i16, dead_zone_threshold: u16) -> f32 {
     let mut x: f32 = 0.0;
-    if value < -(dead_zone_threshhold as i16) {
-        x = (value + dead_zone_threshhold as i16) as f32 / (32760.0 - dead_zone_threshhold as f32);
-    } else if value > dead_zone_threshhold as i16 {
-        x = (value - dead_zone_threshhold as i16) as f32 / (32767.0 - dead_zone_threshhold as f32);
+    if value < -(dead_zone_threshold as i16) {
+        x = (value + dead_zone_threshold as i16) as f32 / (32760.0 - dead_zone_threshold as f32);
+    } else if value > dead_zone_threshold as i16 {
+        x = (value - dead_zone_threshold as i16) as f32 / (32767.0 - dead_zone_threshold as f32);
     }
     x
 }
@@ -104,7 +210,7 @@ fn win32_process_pending_messages(keyboard_controller: &mut GameControllerInput)
     let mut msg = MSG::default();
 
     unsafe {
-        while (PeekMessageW(&mut msg, HWND(0), 0, 0, PM_REMOVE)).into() {
+        while PeekMessageW(&mut msg, HWND(0), 0, 0, PM_REMOVE).as_bool() {
             match msg.message {
                 WM_QUIT => {
                     RUNNING = false;
@@ -560,7 +666,7 @@ pub fn win32_init_d_sound(window: HWND, samples_per_second: u32, buffer_size: u3
     // BufferDescription for secondary buffer
     let buffer_description = DSBUFFERDESC {
         dwSize: size_of::<DSBUFFERDESC>() as u32,
-        dwFlags: 0,
+        dwFlags: DSBCAPS_GETCURRENTPOSITION2,
         dwBufferBytes: buffer_size,
         lpwfxFormat: &mut wave_format,
         ..Default::default()
@@ -583,7 +689,7 @@ pub fn win32_init_d_sound(window: HWND, samples_per_second: u32, buffer_size: u3
 pub fn win32_get_window_dimension(window: HWND) -> Result<(i32, i32)> {
     let mut client_rect = RECT::default();
     unsafe {
-        GetClientRect(window, &mut client_rect).unwrap();
+        GetClientRect(window, &mut client_rect)?;
     }
     let width = client_rect.right - client_rect.left;
     let height = client_rect.bottom - client_rect.top;
@@ -705,10 +811,14 @@ pub unsafe extern "system" fn win32_main_window_callback(
         result
     }
 }
+
 pub fn win32_main() -> Result<()> {
     unsafe {
-        let mut perf_counter_freq: i64 = 0;
-        QueryPerformanceFrequency(&mut perf_counter_freq).unwrap();
+        QueryPerformanceFrequency(&mut PERF_COUNTER_FREQ).unwrap();
+
+        // Set schedular granularity to 1ms to make Sleep() more granular
+        let desired_scheduler_ms = 1;
+        let sleep_is_granular = timeBeginPeriod(desired_scheduler_ms) != TIMERR_NOERROR;
 
         let mut window_class = WNDCLASSW::default();
 
@@ -718,6 +828,13 @@ pub fn win32_main() -> Result<()> {
         window_class.hInstance = GetModuleHandleW(PCWSTR::null()).unwrap().into();
         // window_class.hIcon = ;
         window_class.lpszClassName = w!("GamingWindowClass");
+
+        // We should query and get the actual refresh rate of the monitor
+        const MONITER_REFRESH_HZ: usize = 144;
+        const GAME_UPDATE_HZ: usize = MONITER_REFRESH_HZ / 2;
+        const FRAMES_OF_AUDIO_LATENCY: usize = 2;
+
+        let target_seconds_per_frame = 1.0 / GAME_UPDATE_HZ as f32;
 
         if RegisterClassW(&window_class) != 0 {
             let window = CreateWindowExW(
@@ -737,14 +854,14 @@ pub fn win32_main() -> Result<()> {
             if window != HWND(0) {
                 let device_context = GetDC(window);
 
-                // Sound test
                 let mut sound_output = Win32SoundOutput::default();
                 sound_output.samples_per_second = 48000;
                 sound_output.running_sample_index = 0;
                 sound_output.bytes_per_sample = size_of::<i16>() as u32 * 2;
                 sound_output.secondary_buffer_size =
                     sound_output.samples_per_second * sound_output.bytes_per_sample;
-                sound_output.latency_sample_count = sound_output.samples_per_second / 15;
+                sound_output.latency_sample_count = FRAMES_OF_AUDIO_LATENCY as u32
+                    * (sound_output.samples_per_second / GAME_UPDATE_HZ as u32);
 
                 win32_init_d_sound(
                     window,
@@ -797,7 +914,6 @@ pub fn win32_main() -> Result<()> {
                     .add(game_memory.permanent_storage_size as usize)
                     .cast();
 
-                // TODO: I dont know if this semantically correct?
                 if !samples.is_null()
                     && !game_memory.permanent_storage.is_null()
                     && !game_memory.transient_storage.is_null()
@@ -805,8 +921,15 @@ pub fn win32_main() -> Result<()> {
                     let new_input = &mut GameInput::default();
                     let old_input = &mut GameInput::default();
 
-                    let mut last_counter: i64 = 0;
-                    QueryPerformanceCounter(&mut last_counter).unwrap();
+                    let mut last_counter: i64 = win32_get_wall_clock();
+
+                    let mut debug_time_marker_index = 0;
+                    let mut debug_time_markers =
+                        [Win32DebugTimeMarker::default(); GAME_UPDATE_HZ / 2];
+
+                    let mut last_play_cursor = 0;
+                    let mut sound_is_valid = false;
+
                     let mut last_cycle_count = _rdtsc();
 
                     while RUNNING {
@@ -987,42 +1110,28 @@ pub fn win32_main() -> Result<()> {
                             }
                         }
 
-                        // DirectSound output test
+                        // Compute how much sound to write and where
                         let mut byte_to_lock = 0;
                         let target_cursor;
                         let mut bytes_to_write = 0;
-                        let mut play_cursor = 0;
-                        let mut write_cursor = 0;
-                        let mut sound_is_valid = false;
-                        match SECONDARY_BUFFER
-                            .as_ref()
-                            .unwrap()
-                            .GetCurrentPosition(Some(&mut play_cursor), Some(&mut write_cursor))
-                        {
-                            Ok(_) => {
-                                sound_is_valid = true;
-                                byte_to_lock = (sound_output.running_sample_index
-                                    * sound_output.bytes_per_sample)
-                                    % sound_output.secondary_buffer_size;
+                        if sound_is_valid {
+                            byte_to_lock = (sound_output.running_sample_index
+                                * sound_output.bytes_per_sample)
+                                % sound_output.secondary_buffer_size;
 
-                                target_cursor = (play_cursor
-                                    + (sound_output.latency_sample_count
-                                        * sound_output.bytes_per_sample))
-                                    % sound_output.secondary_buffer_size;
-                                if byte_to_lock > target_cursor {
-                                    bytes_to_write =
-                                        sound_output.secondary_buffer_size - byte_to_lock;
-                                    bytes_to_write += target_cursor;
-                                } else {
-                                    bytes_to_write = target_cursor - byte_to_lock;
-                                    /* TODO: Passing bytes_to_write as 0 throws an error.
-                                    UPDATE: This happens when resizing the window, so something with buffer sizes?
-                                    Also the rendering is bugged on the default resolution of the window but fixes when you make it bigger.
-                                    But that in turn trigger the audio bug :/ */
-                                }
-                            }
-                            Err(e) => {
-                                dbg!(e);
+                            target_cursor = (last_play_cursor
+                                + (sound_output.latency_sample_count
+                                    * sound_output.bytes_per_sample))
+                                % sound_output.secondary_buffer_size;
+                            if byte_to_lock > target_cursor {
+                                bytes_to_write = sound_output.secondary_buffer_size - byte_to_lock;
+                                bytes_to_write += target_cursor;
+                            } else {
+                                bytes_to_write = target_cursor - byte_to_lock;
+                                /* TODO: Passing bytes_to_write as 0 throws an error.
+                                UPDATE: This happens when resizing the window, so something with buffer sizes?
+                                Also the rendering is bugged on the default resolution of the window but fixes when you make it bigger.
+                                But that in turn trigger the audio bug :/ */
                             }
                         }
 
@@ -1050,7 +1159,48 @@ pub fn win32_main() -> Result<()> {
                             );
                         }
 
-                        let dimension = win32_get_window_dimension(window).unwrap();
+                        let work_counter = win32_get_wall_clock();
+                        let work_seconds_elapsed =
+                            win32_get_seconds_elapsed(last_counter, work_counter);
+
+                        let mut seconds_elapsed_for_frame = work_seconds_elapsed;
+
+                        if seconds_elapsed_for_frame < target_seconds_per_frame {
+                            if sleep_is_granular {
+                                let sleep_ms = (1000.0
+                                    * (target_seconds_per_frame - seconds_elapsed_for_frame))
+                                    as u32;
+                                if sleep_ms > 0 {
+                                    Sleep(sleep_ms);
+                                }
+                            }
+                            while seconds_elapsed_for_frame < target_seconds_per_frame {
+                                seconds_elapsed_for_frame =
+                                    win32_get_seconds_elapsed(last_counter, win32_get_wall_clock());
+                            }
+                        } else {
+                            // Logging
+                            dbg!(seconds_elapsed_for_frame, target_seconds_per_frame);
+                        }
+
+                        let end_counter = win32_get_wall_clock();
+                        let ms_per_frame =
+                            1000.0 * win32_get_seconds_elapsed(last_counter, end_counter);
+                        last_counter = end_counter;
+
+                        let dimension = win32_get_window_dimension(window).unwrap_or_else(|e| {
+                            dbg!(e);
+                            Default::default()
+                        });
+
+                        #[cfg(feature = "gaming_internal")]
+                        win32_debug_sync_display(
+                            &GLOBAL_BACK_BUFFER,
+                            debug_time_markers.len(),
+                            debug_time_markers.as_ref(),
+                            &sound_output,
+                            target_seconds_per_frame,
+                        );
 
                         win32_display_buffer_in_window(
                             device_context,
@@ -1059,40 +1209,57 @@ pub fn win32_main() -> Result<()> {
                             dimension.1,
                         );
 
-                        // This makes the window not live update, have to look into how this works
-                        // ReleaseDC(window, device_context);
+                        let mut play_cursor = 0;
+                        let mut write_cursor = 0;
+                        match SECONDARY_BUFFER
+                            .as_ref()
+                            .unwrap()
+                            .GetCurrentPosition(Some(&mut play_cursor), Some(&mut write_cursor))
+                        {
+                            Ok(_) => {
+                                last_play_cursor = play_cursor;
+                                sound_is_valid = true;
+                            }
+                            Err(e) => {
+                                sound_is_valid = false;
+                                dbg!(e);
+                            }
+                        }
 
-                        let end_cycle_count = _rdtsc();
+                        #[cfg(feature = "gaming_internal")]
+                        {
+                            let marker = &mut debug_time_markers[debug_time_marker_index];
+                            debug_time_marker_index += 1;
 
-                        let mut end_counter: i64 = 0;
-                        QueryPerformanceCounter(&mut end_counter).unwrap();
+                            marker.play_cursor = play_cursor;
+                            marker.write_cursor = write_cursor;
 
-                        let cycles_elapsed = end_cycle_count - last_cycle_count;
-                        let counter_elapsed: i64 = end_counter - last_counter;
-                        let millis_per_frame = (1000 * counter_elapsed) / perf_counter_freq;
-                        let fps = perf_counter_freq / counter_elapsed;
-                        let megac_per_frame = cycles_elapsed / (1000 * 1000);
-
-                        let timer_output = format!(
-                            "{}ms/f, {}f/s, {}mc/f",
-                            millis_per_frame, fps, megac_per_frame
-                        );
-
-                        // dbg!(timer_output);
-
-                        last_counter = end_counter;
-                        last_cycle_count = end_cycle_count;
+                            if debug_time_marker_index >= debug_time_markers.len() {
+                                debug_time_marker_index = 0;
+                            }
+                        }
 
                         swap(new_input, old_input);
-                        // let temp = new_input;
-                        // new_input = old_input;
-                        // old_input = temp;
+
+                        let end_cycle_count = _rdtsc();
+                        let cycles_elapsed = end_cycle_count - last_cycle_count;
+                        last_cycle_count = end_cycle_count;
+
+                        let fps = 0.0;
+                        let megac_per_frame = cycles_elapsed / (1000 * 1000);
+
+                        let timer_output =
+                            format!("{}ms/f, {}f/s, {}mc/f", ms_per_frame, fps, megac_per_frame);
+
+                        dbg!(timer_output);
                     }
                 } else {
                     //Logging
                     dbg!(samples);
                     dbg!(game_memory.permanent_storage);
                 }
+
+                ReleaseDC(window, device_context);
             } else {
                 //Logging
                 dbg!(window);

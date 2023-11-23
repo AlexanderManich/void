@@ -28,5 +28,6 @@ features = [
     "Win32_Storage_FileSystem",
     "Win32_Security",
     "Win32_System_IO",
+    "Win32_System_Threading",
 ]
 
