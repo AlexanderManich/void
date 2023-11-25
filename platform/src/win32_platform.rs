@@ -1,5 +1,12 @@
 #![deny(unsafe_op_in_unsafe_fn)]
-use std::{arch::x86_64::_rdtsc, ffi::c_void, mem::size_of, ptr::swap};
+use crate::macros::*;
+use game_definitions::*;
+use std::{
+    arch::x86_64::_rdtsc,
+    ffi::c_void,
+    mem::{size_of, transmute},
+    ptr::{null_mut, swap},
+};
 use windows::{
     core::*,
     Win32::{
@@ -15,8 +22,6 @@ use windows::{
         UI::{Input::XboxController::*, WindowsAndMessaging::*},
     },
 };
-
-use crate::{gaming_engine::*, macros::*};
 
 #[derive(Clone, Copy)]
 pub struct Win32OffscreenBuffer {
@@ -48,18 +53,6 @@ pub struct Win32SoundOutput {
 fn safe_truncateu64(value: u64) -> u32 {
     debug_assert!(value <= u32::MAX.into());
     value as u32
-}
-
-#[cfg(feature = "gaming_internal")]
-pub struct DebugReadFileResult {
-    pub contents: *mut c_void,
-    pub contents_size: u32,
-}
-
-impl Default for DebugReadFileResult {
-    fn default() -> Self {
-        unsafe { ::core::mem::zeroed() }
-    }
 }
 
 #[derive(Copy, Clone)]
@@ -145,6 +138,47 @@ fn win32_debug_draw_vertical(
     }
 }
 
+type GameGetSoundSamples =
+    extern "C" fn(memory: &mut GameMemory, sound_buffer: &GameSoundOutputBuffer);
+type GameUpdateAndRender =
+    extern "C" fn(buffer: &GameOffscreenBuffer, input: &mut GameInput, memory: &mut GameMemory);
+type GetController =
+    extern "C" fn(input: &mut GameInput, controller_index: usize) -> &mut GameControllerInput;
+struct Win32GameCode {
+    game_code_dll: Option<HMODULE>,
+    get_sound_samples: Option<GameGetSoundSamples>,
+    update_and_render: Option<GameUpdateAndRender>,
+    get_controller: Option<GetController>,
+}
+
+fn win32_load_game_code() -> Win32GameCode {
+    let mut result = Win32GameCode {
+        game_code_dll: None,
+        get_sound_samples: None,
+        update_and_render: None,
+        get_controller: None,
+    };
+
+    unsafe {
+        match LoadLibraryW(w!("game.dll")) {
+            Ok(hmodule) => {
+                result.game_code_dll = Some(hmodule);
+                let p = GetProcAddress(hmodule, s!("game_get_sound_samples"));
+                result.get_sound_samples = Some(transmute::<_, GameGetSoundSamples>(p));
+                let p = GetProcAddress(hmodule, s!("game_update_and_render"));
+                result.update_and_render = Some(transmute::<_, GameUpdateAndRender>(p));
+                let p = GetProcAddress(hmodule, s!("get_controller"));
+                result.get_controller = Some(transmute::<_, GetController>(p));
+            }
+            Err(e) => {
+                dbg!(e);
+            }
+        }
+    };
+
+    result
+}
+
 #[inline]
 fn win32_draw_sound_buffer_marker(
     back_buffer: &Win32OffscreenBuffer,
@@ -156,13 +190,10 @@ fn win32_draw_sound_buffer_marker(
     value: u32,
     color: u32,
 ) {
-    debug_assert!(value < sound_output.secondary_buffer_size);
     let x_f32 = c * value as f32;
     let x = x_f32 as i32 + pad_x;
 
-    if (x >= 0) && (x < back_buffer.width) {
-        win32_debug_draw_vertical(back_buffer, x, top, bottom, color);
-    }
+    win32_debug_draw_vertical(back_buffer, x, top, bottom, color);
 }
 
 fn win32_debug_sync_display(
@@ -456,7 +487,7 @@ fn win32_process_pending_messages(keyboard_controller: &mut GameControllerInput)
     }
 }
 
-pub fn debug_platform_read_entire_file(filename: PCWSTR) -> Result<DebugReadFileResult> {
+pub extern "C" fn debug_platform_read_entire_file(filename: PCWSTR) -> Result<DebugReadFileResult> {
     unsafe {
         let mut result: DebugReadFileResult = Default::default();
         let file_handle = CreateFileW(
@@ -509,7 +540,7 @@ pub fn debug_platform_read_entire_file(filename: PCWSTR) -> Result<DebugReadFile
     }
 }
 
-pub fn debug_platform_free_file_memory(memory: *mut c_void) {
+pub extern "C" fn debug_platform_free_file_memory(memory: *mut c_void) {
     if !memory.is_null() {
         unsafe {
             VirtualFree(memory, 0, MEM_RELEASE).unwrap_or_else(|e| {
@@ -519,7 +550,7 @@ pub fn debug_platform_free_file_memory(memory: *mut c_void) {
     }
 }
 
-pub fn debug_platform_write_entire_file(
+pub extern "C" fn debug_platform_write_entire_file(
     filename: PCWSTR,
     memory_size: u32,
     memory: *mut c_void,
@@ -649,7 +680,6 @@ pub fn win32_fill_sound_buffer(
     let mut region2_size = 0;
 
     unsafe {
-        // TODO: There is a bug here, where sometimes the parameters are not correct
         SECONDARY_BUFFER
             .as_ref()
             .unwrap()
@@ -917,6 +947,8 @@ pub unsafe extern "system" fn win32_main_window_callback(
 
 pub fn win32_main() -> Result<()> {
     unsafe {
+        let game: Win32GameCode = win32_load_game_code();
+
         QueryPerformanceFrequency(&mut PERF_COUNTER_FREQ).unwrap();
 
         // Set schedular granularity to 1ms to make Sleep() more granular
@@ -1002,9 +1034,14 @@ pub fn win32_main() -> Result<()> {
                 let base_address: Option<*const c_void> = None;
 
                 let mut game_memory = GameMemory {
+                    is_initialized: false,
+                    permanent_storage: null_mut(),
                     permanent_storage_size: mega_bytes!(64),
+                    transient_storage: null_mut(),
                     transient_storage_size: giga_bytes!(1),
-                    ..Default::default()
+                    debug_platform_read_entire_file,
+                    debug_platform_free_file_memory,
+                    debug_platform_write_entire_file,
                 };
 
                 let total_size =
@@ -1041,8 +1078,8 @@ pub fn win32_main() -> Result<()> {
                     let mut last_cycle_count = _rdtsc();
 
                     while GLOBAL_RUNNING {
-                        let old_keyboard_controller = get_controller(old_input, 0);
-                        let new_keyboard_controller = get_controller(new_input, 0);
+                        let old_keyboard_controller = (game.get_controller).unwrap()(old_input, 0);
+                        let new_keyboard_controller = (game.get_controller).unwrap()(new_input, 0);
                         *new_keyboard_controller = Default::default();
                         new_keyboard_controller.is_connected = true;
 
@@ -1064,10 +1101,14 @@ pub fn win32_main() -> Result<()> {
 
                             for controller_index in 0..XUSER_MAX_COUNT {
                                 let our_controller_index = controller_index + 1;
-                                let old_controller =
-                                    get_controller(old_input, our_controller_index as usize);
-                                let new_controller =
-                                    get_controller(new_input, our_controller_index as usize);
+                                let old_controller = (game.get_controller).unwrap()(
+                                    old_input,
+                                    our_controller_index as usize,
+                                );
+                                let new_controller = (game.get_controller).unwrap()(
+                                    new_input,
+                                    our_controller_index as usize,
+                                );
                                 let controller_state = &mut XINPUT_STATE::default();
                                 if XInputGetState(controller_index, controller_state)
                                     == ERROR_SUCCESS.0
@@ -1244,7 +1285,7 @@ pub fn win32_main() -> Result<()> {
                                 pitch: GLOBAL_BACK_BUFFER.pitch,
                             };
 
-                            game_update_and_render(&buffer, new_input, &mut game_memory);
+                            (game.update_and_render).unwrap()(&buffer, new_input, &mut game_memory);
 
                             let audio_wall_clock = win32_get_wall_clock();
                             let from_begin_to_audio_seconds =
@@ -1321,7 +1362,10 @@ pub fn win32_main() -> Result<()> {
                                             / sound_output.bytes_per_sample,
                                         samples: samples as *mut i16,
                                     };
-                                    game_get_sound_samples(&mut game_memory, &sound_buffer);
+                                    (game.get_sound_samples).unwrap()(
+                                        &mut game_memory,
+                                        &sound_buffer,
+                                    );
 
                                     #[cfg(feature = "gaming_internal")]
                                     {

@@ -1,33 +1,7 @@
-[package]
-name = "gaming"
-version = "0.1.0"
-edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[features]
-# Features in default are enabled, others are disabled.
-default = ["gaming_slow", "gaming_internal"]
-gaming_internal = []
-gaming_slow = []
-
-[dependencies]
-
-[dependencies.windows]
-version = "0.51"
-features = [
-    "Win32_UI_WindowsAndMessaging",
-    "Win32_Graphics_Gdi",
-    "Win32_Foundation",
-    "Win32_System_LibraryLoader",
-    "Win32_System_Diagnostics_Debug",
-    "Win32_System_Memory",
-    "Win32_UI_Input_XboxController",
-    "Win32_Media_Audio_DirectSound",
-    "Win32_System_Performance",
-    "Win32_Storage_FileSystem",
-    "Win32_Security",
-    "Win32_System_IO",
-    "Win32_System_Threading",
+[workspace]
+members = [
+    "platform",
+    "game",
+    "game_definitions"
 ]
-
+resolver = "2"

@@ -8,7 +8,7 @@
             "name": "(gdb) Pipe Launch",
             "type": "cppvsdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/target/debug/${workspaceFolderBasename}",
+            "program": "${workspaceFolder}/target/debug/platform.exe",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${fileDirname}",

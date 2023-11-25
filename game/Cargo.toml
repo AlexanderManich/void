@@ -1,0 +1,20 @@
+[package]
+name = "game"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+game_definitions = { path = "../game_definitions" }
+platform = { path = "../platform" }
+
+[dependencies.windows]
+version = "0.51"
+
+[features]
+# Features in default are enabled, others are disabled.
+default = ["gaming_slow", "gaming_internal"]
+gaming_internal = []
+gaming_slow = []

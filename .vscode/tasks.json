@@ -9,7 +9,7 @@
 			],
 			"args": [
 				// Cross-compilation example
-				// --target=x86_64-pc-windows-gnu
+				// "--target=x86_64-pc-windows-gnu"
 			],
 			"group": "build",
 			"label": "rust: cargo build"

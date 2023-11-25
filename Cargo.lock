@@ -3,9 +3,26 @@
 version = 3
 
 [[package]]
-name = "gaming"
+name = "game"
 version = "0.1.0"
 dependencies = [
+ "game_definitions",
+ "platform",
+ "windows",
+]
+
+[[package]]
+name = "game_definitions"
+version = "0.1.0"
+dependencies = [
+ "windows",
+]
+
+[[package]]
+name = "platform"
+version = "0.1.0"
+dependencies = [
+ "game_definitions",
  "windows",
 ]
 
