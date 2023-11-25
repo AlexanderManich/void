@@ -119,15 +119,15 @@ fn win32_debug_draw_vertical(
     back_buffer: &Win32OffscreenBuffer,
     x: i32,
     mut top: i32,
-    bottom: i32,
+    mut bottom: i32,
     color: u32,
 ) {
     if top <= 0 {
         top = 0;
     }
 
-    if bottom > back_buffer.height {
-        back_buffer.height;
+    if bottom >= back_buffer.height {
+        bottom = back_buffer.height - 1;
     }
 
     if x >= 0 && x < back_buffer.width {
@@ -156,10 +156,13 @@ fn win32_draw_sound_buffer_marker(
     value: u32,
     color: u32,
 ) {
+    debug_assert!(value < sound_output.secondary_buffer_size);
     let x_f32 = c * value as f32;
     let x = x_f32 as i32 + pad_x;
 
-    win32_debug_draw_vertical(back_buffer, x, top, bottom, color);
+    if (x >= 0) && (x < back_buffer.width) {
+        win32_debug_draw_vertical(back_buffer, x, top, bottom, color);
+    }
 }
 
 fn win32_debug_sync_display(
