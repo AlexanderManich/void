@@ -199,13 +199,12 @@ pub fn game_update_and_render(
         if !memory.is_initialized {
             #[cfg(feature = "gaming_internal")]
             {
-                // TODO: File path of THIS file right now. Path is relative to where debug_platform_read_entire_file is called.
-                let filename = "..\\game\\src\\gaming_engine.rs"
-                    .encode_utf16()
-                    .chain([0u16])
-                    .collect::<Vec<u16>>();
-                let filename_pcwstr = PCWSTR(filename.as_ptr());
-                match (memory.debug_platform_read_entire_file)(filename_pcwstr) {
+                // TODO: File path of THIS file right now. Change it. Also there is some fuckery with the path where it throws an error
+                // if you are not debugging the platform file.
+                // let filename = file!().encode_utf16().chain([0u16]).collect::<Vec<u16>>();
+                // let filename_pcwstr = PCWSTR(filename.as_ptr());
+                let filename: PCWSTR = w!("..\\game\\src\\gaming_engine.rs");
+                match (memory.debug_platform_read_entire_file)(filename) {
                     Ok(file) => {
                         (memory.debug_platform_write_entire_file)(
                             w!("..\\src\\test.out"),
