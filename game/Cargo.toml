@@ -4,11 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-game_definitions = { path = "../game_definitions" }
-platform = { path = "../platform" }
 
 [dependencies.windows]
 version = "0.51"

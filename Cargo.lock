@@ -6,23 +6,14 @@ version = 3
 name = "game"
 version = "0.1.0"
 dependencies = [
- "game_definitions",
- "platform",
  "windows",
 ]
 
 [[package]]
-name = "game_definitions"
+name = "gaming"
 version = "0.1.0"
 dependencies = [
- "windows",
-]
-
-[[package]]
-name = "platform"
-version = "0.1.0"
-dependencies = [
- "game_definitions",
+ "game",
  "windows",
 ]
 

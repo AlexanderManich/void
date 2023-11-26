@@ -1,6 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 use crate::macros::*;
-use game_definitions::*;
+use game::gaming_engine::*;
 use std::{
     arch::x86_64::_rdtsc,
     ffi::c_void,
@@ -138,12 +138,10 @@ fn win32_debug_draw_vertical(
     }
 }
 
-type GameGetSoundSamples =
-    extern "C" fn(memory: &mut GameMemory, sound_buffer: &GameSoundOutputBuffer);
+type GameGetSoundSamples = fn(memory: &mut GameMemory, sound_buffer: &GameSoundOutputBuffer);
 type GameUpdateAndRender =
-    extern "C" fn(buffer: &GameOffscreenBuffer, input: &mut GameInput, memory: &mut GameMemory);
-type GetController =
-    extern "C" fn(input: &mut GameInput, controller_index: usize) -> &mut GameControllerInput;
+    fn(buffer: &GameOffscreenBuffer, input: &mut GameInput, memory: &mut GameMemory);
+type GetController = fn(input: &mut GameInput, controller_index: usize) -> &mut GameControllerInput;
 struct Win32GameCode {
     game_code_dll: Option<HMODULE>,
     get_sound_samples: Option<GameGetSoundSamples>,
@@ -487,7 +485,8 @@ fn win32_process_pending_messages(keyboard_controller: &mut GameControllerInput)
     }
 }
 
-pub extern "C" fn debug_platform_read_entire_file(filename: PCWSTR) -> Result<DebugReadFileResult> {
+#[no_mangle]
+pub fn debug_platform_read_entire_file(filename: PCWSTR) -> Result<DebugReadFileResult> {
     unsafe {
         let mut result: DebugReadFileResult = Default::default();
         let file_handle = CreateFileW(
@@ -540,7 +539,7 @@ pub extern "C" fn debug_platform_read_entire_file(filename: PCWSTR) -> Result<De
     }
 }
 
-pub extern "C" fn debug_platform_free_file_memory(memory: *mut c_void) {
+pub fn debug_platform_free_file_memory(memory: *mut c_void) {
     if !memory.is_null() {
         unsafe {
             VirtualFree(memory, 0, MEM_RELEASE).unwrap_or_else(|e| {
@@ -550,7 +549,7 @@ pub extern "C" fn debug_platform_free_file_memory(memory: *mut c_void) {
     }
 }
 
-pub extern "C" fn debug_platform_write_entire_file(
+pub fn debug_platform_write_entire_file(
     filename: PCWSTR,
     memory_size: u32,
     memory: *mut c_void,
@@ -566,7 +565,7 @@ pub extern "C" fn debug_platform_write_entire_file(
             HANDLE(0),
         )?;
 
-        let write_buffer = &mut *memory.cast::<u8>();
+        let write_buffer = memory.cast::<u8>();
 
         let mut bytes_written: u32 = 0;
         match WriteFile(
@@ -864,7 +863,7 @@ pub fn win32_resize_dib_section(buffer: &mut Win32OffscreenBuffer, width: i32, h
     }
 }
 
-pub fn win32_display_buffer_in_window(
+fn win32_display_buffer_in_window(
     device_context: HDC,
     buffer: &Win32OffscreenBuffer,
     window_width: i32,
@@ -891,7 +890,7 @@ pub fn win32_display_buffer_in_window(
     }
 }
 
-pub unsafe extern "system" fn win32_main_window_callback(
+unsafe extern "system" fn win32_main_window_callback(
     window: HWND,
     msg: u32,
     wparam: WPARAM,
