@@ -138,16 +138,10 @@ fn win32_debug_draw_vertical(
         }
     }
 }
-
-type GameGetSoundSamples = fn(memory: &mut GameMemory, sound_buffer: &GameSoundOutputBuffer);
-type GameUpdateAndRender =
-    fn(buffer: &GameOffscreenBuffer, input: &mut GameInput, memory: &mut GameMemory);
-type GetController = fn(input: &mut GameInput, controller_index: usize) -> &mut GameControllerInput;
 struct Win32GameCode {
     game_code_dll: Option<HMODULE>,
     get_sound_samples: Option<GameGetSoundSamples>,
     update_and_render: Option<GameUpdateAndRender>,
-    get_controller: Option<GetController>,
 }
 
 fn win32_load_game_code() -> Win32GameCode {
@@ -155,7 +149,6 @@ fn win32_load_game_code() -> Win32GameCode {
         game_code_dll: None,
         get_sound_samples: None,
         update_and_render: None,
-        get_controller: None,
     };
     unsafe {
         CopyFileW(
@@ -174,8 +167,6 @@ fn win32_load_game_code() -> Win32GameCode {
                 result.get_sound_samples = Some(transmute::<_, GameGetSoundSamples>(p));
                 let p = GetProcAddress(hmodule, s!("game_update_and_render"));
                 result.update_and_render = Some(transmute::<_, GameUpdateAndRender>(p));
-                let p = GetProcAddress(hmodule, s!("get_controller"));
-                result.get_controller = Some(transmute::<_, GetController>(p));
             }
             Err(e) => {
                 dbg!(e);
@@ -197,7 +188,6 @@ fn win32_unload_game_code(game_code: &mut Win32GameCode) {
     game_code.game_code_dll = None;
     game_code.get_sound_samples = None;
     game_code.update_and_render = None;
-    game_code.get_controller = None;
 }
 
 #[inline]
@@ -1108,8 +1098,8 @@ pub fn win32_main() -> Result<()> {
                         }
                         load_counter += 1;
 
-                        let old_keyboard_controller = (game.get_controller).unwrap()(old_input, 0);
-                        let new_keyboard_controller = (game.get_controller).unwrap()(new_input, 0);
+                        let old_keyboard_controller = get_controller(old_input, 0);
+                        let new_keyboard_controller = get_controller(new_input, 0);
                         *new_keyboard_controller = Default::default();
                         new_keyboard_controller.is_connected = true;
 
@@ -1131,14 +1121,10 @@ pub fn win32_main() -> Result<()> {
 
                             for controller_index in 0..XUSER_MAX_COUNT {
                                 let our_controller_index = controller_index + 1;
-                                let old_controller = (game.get_controller).unwrap()(
-                                    old_input,
-                                    our_controller_index as usize,
-                                );
-                                let new_controller = (game.get_controller).unwrap()(
-                                    new_input,
-                                    our_controller_index as usize,
-                                );
+                                let old_controller =
+                                    get_controller(old_input, our_controller_index as usize);
+                                let new_controller =
+                                    get_controller(new_input, our_controller_index as usize);
                                 let controller_state = &mut XINPUT_STATE::default();
                                 if XInputGetState(controller_index, controller_state)
                                     == ERROR_SUCCESS.0

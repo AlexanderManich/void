@@ -8,6 +8,10 @@ use std::ffi::c_void;
 
 use windows::core::*;
 
+pub type GameGetSoundSamples = fn(memory: &mut GameMemory, sound_buffer: &GameSoundOutputBuffer);
+pub type GameUpdateAndRender =
+    fn(buffer: &GameOffscreenBuffer, input: &mut GameInput, memory: &mut GameMemory);
+
 pub struct GameOffscreenBuffer {
     pub width: i32,
     pub height: i32,
@@ -129,8 +133,7 @@ pub struct GameState {
 }
 
 #[inline]
-#[no_mangle]
-fn get_controller(input: &mut GameInput, controller_index: usize) -> &mut GameControllerInput {
+pub fn get_controller(input: &mut GameInput, controller_index: usize) -> &mut GameControllerInput {
     assert!(controller_index < input.controllers.len());
     &mut input.controllers[controller_index]
 }
@@ -147,9 +150,8 @@ pub fn render_gradient(buffer: &GameOffscreenBuffer, blue_offset: i32, green_off
                 let blue = (x + blue_offset) & 0xFF;
                 let green = (y + green_offset) & 0xFF;
 
-                let shift = 16;
                 // Shift green up by 8 bits from bottom, to make them sit in the green channel and not overwrite the blue channel (little endian)
-                *pixel = ((green << shift) | blue) as u32;
+                *pixel = ((green << 16) | blue) as u32;
                 pixel = pixel.add(1);
             }
 

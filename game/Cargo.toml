@@ -3,10 +3,9 @@ name = "game"
 version = "0.1.0"
 edition = "2021"
 
-# cdylib doesn't output a .dll file for some reason. Workaround right now is use dylib to generate dll and then change to cdylib
 [lib]
 crate-type = ["cdylib", "rlib"]
-
+ 
 [dependencies]
 
 [dependencies.windows]
