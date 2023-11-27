@@ -3,6 +3,7 @@ use crate::macros::*;
 use game::gaming_engine::*;
 use std::{
     arch::x86_64::_rdtsc,
+    default,
     ffi::c_void,
     mem::{size_of, transmute},
     ptr::{null_mut, swap},
@@ -156,9 +157,17 @@ fn win32_load_game_code() -> Win32GameCode {
         update_and_render: None,
         get_controller: None,
     };
-
     unsafe {
-        match LoadLibraryW(w!("game.dll")) {
+        CopyFileW(
+            w!("target\\debug\\game.dll"),
+            w!("target\\debug\\game_temp.dll"),
+            false,
+        )
+        .unwrap_or_else(|e| {
+            dbg!(e);
+        });
+
+        match LoadLibraryW(w!("target\\debug\\game_temp.dll")) {
             Ok(hmodule) => {
                 result.game_code_dll = Some(hmodule);
                 let p = GetProcAddress(hmodule, s!("game_get_sound_samples"));
@@ -175,6 +184,20 @@ fn win32_load_game_code() -> Win32GameCode {
     };
 
     result
+}
+
+fn win32_unload_game_code(game_code: &mut Win32GameCode) {
+    if let Some(hmodule) = game_code.game_code_dll {
+        unsafe {
+            FreeLibrary(hmodule).unwrap_or_else(|e| {
+                dbg!(e);
+            })
+        };
+    }
+    game_code.game_code_dll = None;
+    game_code.get_sound_samples = None;
+    game_code.update_and_render = None;
+    game_code.get_controller = None;
 }
 
 #[inline]
@@ -946,8 +969,6 @@ unsafe extern "system" fn win32_main_window_callback(
 
 pub fn win32_main() -> Result<()> {
     unsafe {
-        let game: Win32GameCode = win32_load_game_code();
-
         QueryPerformanceFrequency(&mut PERF_COUNTER_FREQ).unwrap();
 
         // Set schedular granularity to 1ms to make Sleep() more granular
@@ -1076,7 +1097,17 @@ pub fn win32_main() -> Result<()> {
 
                     let mut last_cycle_count = _rdtsc();
 
+                    let mut game: Win32GameCode = win32_load_game_code();
+                    let mut load_counter: u32 = 0;
+
                     while GLOBAL_RUNNING {
+                        if load_counter > 120 {
+                            win32_unload_game_code(&mut game);
+                            game = win32_load_game_code();
+                            load_counter = 0
+                        }
+                        load_counter += 1;
+
                         let old_keyboard_controller = (game.get_controller).unwrap()(old_input, 0);
                         let new_keyboard_controller = (game.get_controller).unwrap()(new_input, 0);
                         *new_keyboard_controller = Default::default();
@@ -1443,7 +1474,7 @@ pub fn win32_main() -> Result<()> {
                                 }
                             } else {
                                 // Logging
-                                dbg!(seconds_elapsed_for_frame, target_seconds_per_frame);
+                                // dbg!(seconds_elapsed_for_frame, target_seconds_per_frame);
                             }
 
                             let end_counter = win32_get_wall_clock();

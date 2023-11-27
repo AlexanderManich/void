@@ -1,4 +1,7 @@
-use std::{f32::consts::PI, mem::size_of};
+use std::{
+    f32::consts::PI,
+    mem::{size_of, transmute},
+};
 use windows::core::{w, PCWSTR};
 
 use std::ffi::c_void;
@@ -121,6 +124,8 @@ pub struct GameState {
     pub blue_offset: i32,
     pub green_offset: i32,
     pub tone_hz: u32,
+
+    pub t_sine: f32,
 }
 
 #[inline]
@@ -130,6 +135,7 @@ fn get_controller(input: &mut GameInput, controller_index: usize) -> &mut GameCo
     &mut input.controllers[controller_index]
 }
 
+#[no_mangle]
 pub fn render_gradient(buffer: &GameOffscreenBuffer, blue_offset: i32, green_offset: i32) {
     unsafe {
         // Draw bitmap to window.
@@ -141,8 +147,9 @@ pub fn render_gradient(buffer: &GameOffscreenBuffer, blue_offset: i32, green_off
                 let blue = (x + blue_offset) & 0xFF;
                 let green = (y + green_offset) & 0xFF;
 
+                let shift = 16;
                 // Shift green up by 8 bits from bottom, to make them sit in the green channel and not overwrite the blue channel (little endian)
-                *pixel = ((green << 8) | blue) as u32;
+                *pixel = ((green << shift) | blue) as u32;
                 pixel = pixel.add(1);
             }
 
@@ -151,24 +158,27 @@ pub fn render_gradient(buffer: &GameOffscreenBuffer, blue_offset: i32, green_off
     }
 }
 
-pub fn game_output_sound(sound_buffer: &GameSoundOutputBuffer, tone_hz: u32) {
-    static mut T_SINE: f32 = 0.0;
+pub fn game_output_sound(
+    game_state: &mut GameState,
+    sound_buffer: &GameSoundOutputBuffer,
+    tone_hz: u32,
+) {
     let tone_volume: f32 = 200.0;
     let wave_period = sound_buffer.samples_per_second / tone_hz;
 
     let mut sample_out = sound_buffer.samples;
     for _ in 0..sound_buffer.sample_count {
         unsafe {
-            let sine_value: f32 = T_SINE.sin();
+            let sine_value: f32 = (*game_state).t_sine.sin();
             let sample_value: i16 = (sine_value * tone_volume) as i16;
             *sample_out = sample_value;
             sample_out = sample_out.add(1);
             *sample_out = sample_value;
             sample_out = sample_out.add(1);
 
-            T_SINE += 2.0 * PI / wave_period as f32;
-            if T_SINE > 2.0 * PI {
-                T_SINE -= 2.0 * PI;
+            (*game_state).t_sine += 2.0 * PI / wave_period as f32;
+            if (*game_state).t_sine > 2.0 * PI {
+                (*game_state).t_sine -= 2.0 * PI;
             }
         }
     }
@@ -178,7 +188,7 @@ pub fn game_output_sound(sound_buffer: &GameSoundOutputBuffer, tone_hz: u32) {
 pub fn game_get_sound_samples(memory: &mut GameMemory, sound_buffer: &GameSoundOutputBuffer) {
     let game_state = memory.permanent_storage as *mut GameState;
     unsafe {
-        game_output_sound(sound_buffer, (*game_state).tone_hz);
+        game_output_sound(transmute(game_state), sound_buffer, (*game_state).tone_hz);
     }
 }
 
@@ -203,11 +213,11 @@ pub fn game_update_and_render(
                 // if you are not debugging the platform file.
                 // let filename = file!().encode_utf16().chain([0u16]).collect::<Vec<u16>>();
                 // let filename_pcwstr = PCWSTR(filename.as_ptr());
-                let filename: PCWSTR = w!("..\\game\\src\\gaming_engine.rs");
+                let filename: PCWSTR = w!("game\\src\\gaming_engine.rs");
                 match (memory.debug_platform_read_entire_file)(filename) {
                     Ok(file) => {
                         (memory.debug_platform_write_entire_file)(
-                            w!("..\\src\\test.out"),
+                            w!("src\\test.out"),
                             file.contents_size,
                             file.contents,
                         )
@@ -222,6 +232,7 @@ pub fn game_update_and_render(
                 };
             }
 
+            (*game_state).t_sine = 0.0;
             (*game_state).tone_hz = 256;
             memory.is_initialized = true;
         }
