@@ -151,16 +151,11 @@ fn win32_load_game_code() -> Win32GameCode {
         update_and_render: None,
     };
     unsafe {
-        CopyFileW(
-            w!("target\\debug\\game.dll"),
-            w!("target\\debug\\game_temp.dll"),
-            false,
-        )
-        .unwrap_or_else(|e| {
+        CopyFileW(w!("game.dll"), w!("game_temp.dll"), false).unwrap_or_else(|e| {
             dbg!(e);
         });
 
-        match LoadLibraryW(w!("target\\debug\\game_temp.dll")) {
+        match LoadLibraryW(w!("game_temp.dll")) {
             Ok(hmodule) => {
                 result.game_code_dll = Some(hmodule);
                 let p = GetProcAddress(hmodule, s!("game_get_sound_samples"));
