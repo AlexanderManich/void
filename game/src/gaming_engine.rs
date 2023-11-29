@@ -151,7 +151,7 @@ pub fn render_gradient(buffer: &GameOffscreenBuffer, blue_offset: i32, green_off
                 let green = (y + green_offset) & 0xFF;
 
                 // Shift green up by 8 bits from bottom, to make them sit in the green channel and not overwrite the blue channel (little endian)
-                *pixel = ((green << 8) | blue) as u32;
+                *pixel = ((green << 16) | blue) as u32;
                 pixel = pixel.add(1);
             }
 

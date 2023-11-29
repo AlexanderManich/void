@@ -3,8 +3,9 @@ use crate::macros::*;
 use game::gaming_engine::*;
 use std::{
     arch::x86_64::_rdtsc,
-    default,
+    default, env,
     ffi::c_void,
+    iter::once,
     mem::{size_of, transmute},
     ptr::{null_mut, swap},
 };
@@ -140,22 +141,58 @@ fn win32_debug_draw_vertical(
 }
 struct Win32GameCode {
     game_code_dll: Option<HMODULE>,
+    dll_last_write_time: FILETIME,
     get_sound_samples: Option<GameGetSoundSamples>,
     update_and_render: Option<GameUpdateAndRender>,
 }
 
-fn win32_load_game_code() -> Win32GameCode {
+fn win32_get_last_write_time(filename: PCWSTR) -> FILETIME {
+    let mut last_write_time: FILETIME = Default::default();
+
+    let mut find_data: WIN32_FIND_DATAW = Default::default();
+    unsafe {
+        match FindFirstFileW(filename, &mut find_data) {
+            Ok(find_handle) => {
+                last_write_time = find_data.ftLastWriteTime;
+                if let Err(e) = FindClose(find_handle) {
+                    dbg!(e);
+                };
+            }
+            Err(e) => {
+                dbg!(e);
+                dbg!(env::current_dir().unwrap());
+            }
+        }
+    };
+    last_write_time
+}
+
+fn win32_load_game_code(source_dll_name: PCWSTR) -> Win32GameCode {
     let mut result = Win32GameCode {
         game_code_dll: None,
+        dll_last_write_time: Default::default(),
         get_sound_samples: None,
         update_and_render: None,
     };
-    unsafe {
-        CopyFileW(w!("game.dll"), w!("game_temp.dll"), false).unwrap_or_else(|e| {
-            dbg!(e);
-        });
+    // let filename = file!().encode_utf16().chain(once(0)).collect::<Vec<u16>>();
+    // let filename_pcwstr = PCWSTR(filename.as_ptr());
 
-        match LoadLibraryW(w!("game_temp.dll")) {
+    let temp_dll_name = PCWSTR(
+        "game_temp.dll"
+            .encode_utf16()
+            .chain(once(0))
+            .collect::<Vec<u16>>()
+            .as_ptr(),
+    );
+
+    result.dll_last_write_time = win32_get_last_write_time(source_dll_name);
+
+    unsafe {
+        if let Err(e) = CopyFileW(source_dll_name, temp_dll_name, false) {
+            dbg!(e);
+        }
+
+        match LoadLibraryW(temp_dll_name) {
             Ok(hmodule) => {
                 result.game_code_dll = Some(hmodule);
                 let p = GetProcAddress(hmodule, s!("game_get_sound_samples"));
@@ -1082,16 +1119,22 @@ pub fn win32_main() -> Result<()> {
 
                     let mut last_cycle_count = _rdtsc();
 
-                    let mut game: Win32GameCode = win32_load_game_code();
-                    let mut load_counter: u32 = 0;
+                    let source_dll_name = PCWSTR(
+                        "game.dll"
+                            .encode_utf16()
+                            .chain(once(0))
+                            .collect::<Vec<u16>>()
+                            .as_ptr(),
+                    );
+
+                    let mut game: Win32GameCode = win32_load_game_code(source_dll_name);
 
                     while GLOBAL_RUNNING {
-                        if load_counter > 120 {
+                        let new_dll_write_time = win32_get_last_write_time(source_dll_name);
+                        if CompareFileTime(&new_dll_write_time, &game.dll_last_write_time) != 0 {
                             win32_unload_game_code(&mut game);
-                            game = win32_load_game_code();
-                            load_counter = 0
+                            game = win32_load_game_code(source_dll_name);
                         }
-                        load_counter += 1;
 
                         let old_keyboard_controller = get_controller(old_input, 0);
                         let new_keyboard_controller = get_controller(new_input, 0);
