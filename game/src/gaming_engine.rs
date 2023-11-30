@@ -1,15 +1,12 @@
 use std::{
     env::current_exe,
     f32::consts::PI,
-    iter::once,
+    io,
     mem::{size_of, transmute},
-    os::windows::ffi::OsStrExt,
+    path::PathBuf,
 };
-use windows::core::{w, PCWSTR};
 
 use std::ffi::c_void;
-
-use windows::core::*;
 
 pub type GameGetSoundSamples = fn(memory: &mut GameMemory, sound_buffer: &GameSoundOutputBuffer);
 pub type GameUpdateAndRender =
@@ -108,10 +105,10 @@ impl Default for DebugReadFileResult {
     }
 }
 
-type DebugPlatformReadEntireFile = fn(filename: PCWSTR) -> Result<DebugReadFileResult>;
+type DebugPlatformReadEntireFile = fn(filename: PathBuf) -> io::Result<DebugReadFileResult>;
 type DebugPlatformFreeFileMemory = fn(memory: *mut c_void);
 type DebugPlatformWriteEntireFile =
-    fn(filename: PCWSTR, memory_size: u32, memory: *mut c_void) -> Result<()>;
+    fn(filename: PathBuf, memory_size: u32, memory: *mut c_void) -> io::Result<()>;
 
 pub struct GameMemory {
     pub is_initialized: bool,
@@ -214,29 +211,18 @@ pub fn game_update_and_render(
         if !memory.is_initialized {
             #[cfg(feature = "gaming_internal")]
             {
-                let filename = file!().encode_utf16().chain(once(0)).collect::<Vec<u16>>();
-                let output_filename = current_exe()
-                    .unwrap()
-                    .parent()
-                    .unwrap()
-                    .join("test.out")
-                    .into_os_string()
-                    .into_string()
-                    .unwrap()
-                    .encode_utf16()
-                    .chain(once(0))
-                    .collect::<Vec<u16>>();
+                let filename = PathBuf::from(file!());
+                let output_filename = current_exe().unwrap().parent().unwrap().join("test.out");
 
-                match (memory.debug_platform_read_entire_file)(PCWSTR(filename.as_ptr())) {
+                match (memory.debug_platform_read_entire_file)(filename) {
                     Ok(file) => {
-                        (memory.debug_platform_write_entire_file)(
-                            PCWSTR(output_filename.as_ptr()),
+                        if let Err(e) = (memory.debug_platform_write_entire_file)(
+                            output_filename,
                             file.contents_size,
                             file.contents,
-                        )
-                        .unwrap_or_else(|e| {
+                        ) {
                             dbg!(e);
-                        });
+                        }
                         (memory.debug_platform_free_file_memory)(file.contents);
                     }
                     Err(e) => {

@@ -5,9 +5,10 @@ use std::{
     arch::x86_64::_rdtsc,
     env::current_exe,
     ffi::c_void,
+    io,
     iter::once,
     mem::{size_of, transmute},
-    os::windows::ffi::OsStrExt,
+    path::PathBuf,
     ptr::{null_mut, swap},
 };
 use windows::{
@@ -521,11 +522,20 @@ fn win32_process_pending_messages(keyboard_controller: &mut GameControllerInput)
 }
 
 #[no_mangle]
-pub fn debug_platform_read_entire_file(filename: PCWSTR) -> Result<DebugReadFileResult> {
+pub fn debug_platform_read_entire_file(filename: PathBuf) -> io::Result<DebugReadFileResult> {
     unsafe {
         let mut result: DebugReadFileResult = Default::default();
+
+        let filename_utf16 = filename
+            .into_os_string()
+            .into_string()
+            .unwrap()
+            .encode_utf16()
+            .chain(once(0))
+            .collect::<Vec<u16>>();
+
         let file_handle = CreateFileW(
-            filename,
+            PCWSTR(filename_utf16.as_ptr()),
             GENERIC_READ.0,
             FILE_SHARE_READ,
             None,
@@ -562,9 +572,9 @@ pub fn debug_platform_read_entire_file(filename: PCWSTR) -> Result<DebugReadFile
                     result.contents_size = file_size32;
                 }
                 Err(e) => {
-                    dbg!(debug_platform_free_file_memory(result.contents));
-                    dbg!(e);
+                    debug_platform_free_file_memory(result.contents);
                     result.contents = std::ptr::null_mut();
+                    dbg!(e);
                 }
             }
         }
@@ -577,21 +587,29 @@ pub fn debug_platform_read_entire_file(filename: PCWSTR) -> Result<DebugReadFile
 pub fn debug_platform_free_file_memory(memory: *mut c_void) {
     if !memory.is_null() {
         unsafe {
-            VirtualFree(memory, 0, MEM_RELEASE).unwrap_or_else(|e| {
+            if let Err(e) = VirtualFree(memory, 0, MEM_RELEASE) {
                 dbg!(e);
-            });
+            }
         }
     }
 }
 
 pub fn debug_platform_write_entire_file(
-    filename: PCWSTR,
+    filename: PathBuf,
     memory_size: u32,
     memory: *mut c_void,
-) -> Result<()> {
+) -> io::Result<()> {
     unsafe {
+        let filename_utf16 = filename
+            .into_os_string()
+            .into_string()
+            .unwrap()
+            .encode_utf16()
+            .chain(once(0))
+            .collect::<Vec<u16>>();
+
         let file_handle = CreateFileW(
-            filename,
+            PCWSTR(filename_utf16.as_ptr()),
             GENERIC_WRITE.0,
             FILE_SHARE_NONE,
             None,
