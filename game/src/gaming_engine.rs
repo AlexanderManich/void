@@ -1,6 +1,9 @@
 use std::{
+    env::current_exe,
     f32::consts::PI,
+    iter::once,
     mem::{size_of, transmute},
+    os::windows::ffi::OsStrExt,
 };
 use windows::core::{w, PCWSTR};
 
@@ -151,7 +154,7 @@ pub fn render_gradient(buffer: &GameOffscreenBuffer, blue_offset: i32, green_off
                 let green = (y + green_offset) & 0xFF;
 
                 // Shift green up by 8 bits from bottom, to make them sit in the green channel and not overwrite the blue channel (little endian)
-                *pixel = ((green << 16) | blue) as u32;
+                *pixel = ((green << 8) | blue) as u32;
                 pixel = pixel.add(1);
             }
 
@@ -211,15 +214,23 @@ pub fn game_update_and_render(
         if !memory.is_initialized {
             #[cfg(feature = "gaming_internal")]
             {
-                // TODO: File path of THIS file right now. Change it. Also there is some fuckery with the path where it throws an error
-                // if you are not debugging the platform file.
-                // let filename = file!().encode_utf16().chain([0u16]).collect::<Vec<u16>>();
-                // let filename_pcwstr = PCWSTR(filename.as_ptr());
-                let filename: PCWSTR = w!("..\\..\\game\\src\\gaming_engine.rs");
-                match (memory.debug_platform_read_entire_file)(filename) {
+                let filename = file!().encode_utf16().chain(once(0)).collect::<Vec<u16>>();
+                let output_filename = current_exe()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .join("test.out")
+                    .into_os_string()
+                    .into_string()
+                    .unwrap()
+                    .encode_utf16()
+                    .chain(once(0))
+                    .collect::<Vec<u16>>();
+
+                match (memory.debug_platform_read_entire_file)(PCWSTR(filename.as_ptr())) {
                     Ok(file) => {
                         (memory.debug_platform_write_entire_file)(
-                            w!("..\\..\\src\\test.out"),
+                            PCWSTR(output_filename.as_ptr()),
                             file.contents_size,
                             file.contents,
                         )

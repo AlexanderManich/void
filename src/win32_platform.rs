@@ -3,10 +3,11 @@ use crate::macros::*;
 use game::gaming_engine::*;
 use std::{
     arch::x86_64::_rdtsc,
-    default, env,
+    env::current_exe,
     ffi::c_void,
     iter::once,
     mem::{size_of, transmute},
+    os::windows::ffi::OsStrExt,
     ptr::{null_mut, swap},
 };
 use windows::{
@@ -166,7 +167,7 @@ fn win32_get_last_write_time(filename: PCWSTR) -> FILETIME {
     last_write_time
 }
 
-fn win32_load_game_code(source_dll_name: PCWSTR) -> Win32GameCode {
+fn win32_load_game_code(source_dll_name: PCWSTR, temp_dll_name: PCWSTR) -> Win32GameCode {
     let mut result = Win32GameCode {
         game_code_dll: None,
         dll_last_write_time: Default::default(),
@@ -174,15 +175,10 @@ fn win32_load_game_code(source_dll_name: PCWSTR) -> Win32GameCode {
         update_and_render: None,
     };
 
-    let temp_dll_name = "deps\\game_temp.dll"
-        .encode_utf16()
-        .chain(once(0))
-        .collect::<Vec<u16>>();
-
     result.dll_last_write_time = win32_get_last_write_time(source_dll_name);
 
     unsafe {
-        if let Err(e) = CopyFileW(source_dll_name, PCWSTR(temp_dll_name.as_ptr()), false) {
+        if let Err(e) = CopyFileW(source_dll_name, temp_dll_name, false) {
             dbg!(e);
         }
 
@@ -987,6 +983,25 @@ pub fn win32_main() -> Result<()> {
     unsafe {
         QueryPerformanceFrequency(&mut PERF_COUNTER_FREQ).unwrap();
 
+        let dll_dir_path = current_exe().unwrap().parent().unwrap().join("deps");
+
+        let source_game_code_dll_full_path = dll_dir_path
+            .join("game.dll")
+            .into_os_string()
+            .into_string()
+            .unwrap()
+            .encode_utf16()
+            .chain(once(0))
+            .collect::<Vec<u16>>();
+        let temp_game_code_dll_full_path = dll_dir_path
+            .join("temp_game.dll")
+            .into_os_string()
+            .into_string()
+            .unwrap()
+            .encode_utf16()
+            .chain(once(0))
+            .collect::<Vec<u16>>();
+
         // Set schedular granularity to 1ms to make Sleep() more granular
         let desired_scheduler_ms = 1;
         let sleep_is_granular = timeBeginPeriod(desired_scheduler_ms) != TIMERR_NOERROR;
@@ -1115,20 +1130,21 @@ pub fn win32_main() -> Result<()> {
 
                     // I think the PCWSTR pointer gets dropped after a function is finished using it,
                     // so you have to pass in a seperate pointer everywhere you want to use it.
-                    let source_dll_name = "deps\\game.dll"
-                        .encode_utf16()
-                        .chain(once(0))
-                        .collect::<Vec<u16>>();
-
-                    let mut game: Win32GameCode =
-                        win32_load_game_code(PCWSTR(source_dll_name.as_ptr()));
+                    let mut game: Win32GameCode = win32_load_game_code(
+                        PCWSTR(source_game_code_dll_full_path.as_ptr()),
+                        PCWSTR(temp_game_code_dll_full_path.as_ptr()),
+                    );
 
                     while GLOBAL_RUNNING {
-                        let new_dll_write_time =
-                            win32_get_last_write_time(PCWSTR(source_dll_name.as_ptr()));
+                        let new_dll_write_time = win32_get_last_write_time(PCWSTR(
+                            source_game_code_dll_full_path.as_ptr(),
+                        ));
                         if CompareFileTime(&new_dll_write_time, &game.dll_last_write_time) != 0 {
                             win32_unload_game_code(&mut game);
-                            game = win32_load_game_code(PCWSTR(source_dll_name.as_ptr()));
+                            game = win32_load_game_code(
+                                PCWSTR(source_game_code_dll_full_path.as_ptr()),
+                                PCWSTR(temp_game_code_dll_full_path.as_ptr()),
+                            );
                         }
 
                         let old_keyboard_controller = get_controller(old_input, 0);

@@ -11,10 +11,9 @@
             "program": "${workspaceFolder}/target/debug/${workspaceFolderBasename}.exe",
             "args": [],
             "stopAtEntry": false,
-            "cwd": "${workspaceRoot}/target/debug",
+            "cwd": "${workspaceRoot}",
             "console": "integratedTerminal",
             "preLaunchTask": "rust: cargo build"
-        }   
-   ]
+        }
+    ]
 }
-    
