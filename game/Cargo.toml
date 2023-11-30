@@ -12,9 +12,6 @@ crate-type = ["cdylib", "rlib"]
 [build-dependencies]
 rand = "0.8.5"
 
-[dependencies.windows]
-version = "0.51"
-
 [features]
 # Features in default are enabled, others are disabled.
 default = ["gaming_slow", "gaming_internal"]
