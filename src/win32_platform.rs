@@ -160,7 +160,6 @@ fn win32_get_last_write_time(filename: PCWSTR) -> FILETIME {
             }
             Err(e) => {
                 dbg!(e);
-                dbg!(env::current_dir().unwrap());
             }
         }
     };
@@ -174,25 +173,20 @@ fn win32_load_game_code(source_dll_name: PCWSTR) -> Win32GameCode {
         get_sound_samples: None,
         update_and_render: None,
     };
-    // let filename = file!().encode_utf16().chain(once(0)).collect::<Vec<u16>>();
-    // let filename_pcwstr = PCWSTR(filename.as_ptr());
 
-    let temp_dll_name = PCWSTR(
-        "game_temp.dll"
-            .encode_utf16()
-            .chain(once(0))
-            .collect::<Vec<u16>>()
-            .as_ptr(),
-    );
+    let temp_dll_name = "deps\\game_temp.dll"
+        .encode_utf16()
+        .chain(once(0))
+        .collect::<Vec<u16>>();
 
     result.dll_last_write_time = win32_get_last_write_time(source_dll_name);
 
     unsafe {
-        if let Err(e) = CopyFileW(source_dll_name, temp_dll_name, false) {
+        if let Err(e) = CopyFileW(source_dll_name, PCWSTR(temp_dll_name.as_ptr()), false) {
             dbg!(e);
         }
 
-        match LoadLibraryW(temp_dll_name) {
+        match LoadLibraryW(PCWSTR(temp_dll_name.as_ptr())) {
             Ok(hmodule) => {
                 result.game_code_dll = Some(hmodule);
                 let p = GetProcAddress(hmodule, s!("game_get_sound_samples"));
@@ -1119,21 +1113,22 @@ pub fn win32_main() -> Result<()> {
 
                     let mut last_cycle_count = _rdtsc();
 
-                    let source_dll_name = PCWSTR(
-                        "game.dll"
-                            .encode_utf16()
-                            .chain(once(0))
-                            .collect::<Vec<u16>>()
-                            .as_ptr(),
-                    );
+                    // I think the PCWSTR pointer gets dropped after a function is finished using it,
+                    // so you have to pass in a seperate pointer everywhere you want to use it.
+                    let source_dll_name = "deps\\game.dll"
+                        .encode_utf16()
+                        .chain(once(0))
+                        .collect::<Vec<u16>>();
 
-                    let mut game: Win32GameCode = win32_load_game_code(source_dll_name);
+                    let mut game: Win32GameCode =
+                        win32_load_game_code(PCWSTR(source_dll_name.as_ptr()));
 
                     while GLOBAL_RUNNING {
-                        let new_dll_write_time = win32_get_last_write_time(source_dll_name);
+                        let new_dll_write_time =
+                            win32_get_last_write_time(PCWSTR(source_dll_name.as_ptr()));
                         if CompareFileTime(&new_dll_write_time, &game.dll_last_write_time) != 0 {
                             win32_unload_game_code(&mut game);
-                            game = win32_load_game_code(source_dll_name);
+                            game = win32_load_game_code(PCWSTR(source_dll_name.as_ptr()));
                         }
 
                         let old_keyboard_controller = get_controller(old_input, 0);
@@ -1339,7 +1334,9 @@ pub fn win32_main() -> Result<()> {
                                 pitch: GLOBAL_BACK_BUFFER.pitch,
                             };
 
-                            (game.update_and_render).unwrap()(&buffer, new_input, &mut game_memory);
+                            if let Some(game_update_and_render) = game.update_and_render {
+                                game_update_and_render(&buffer, new_input, &mut game_memory);
+                            }
 
                             let audio_wall_clock = win32_get_wall_clock();
                             let from_begin_to_audio_seconds =
@@ -1416,10 +1413,10 @@ pub fn win32_main() -> Result<()> {
                                             / sound_output.bytes_per_sample,
                                         samples: samples as *mut i16,
                                     };
-                                    (game.get_sound_samples).unwrap()(
-                                        &mut game_memory,
-                                        &sound_buffer,
-                                    );
+
+                                    if let Some(game_get_sound_samples) = game.get_sound_samples {
+                                        game_get_sound_samples(&mut game_memory, &sound_buffer);
+                                    }
 
                                     #[cfg(feature = "gaming_internal")]
                                     {
