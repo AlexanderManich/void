@@ -9,7 +9,7 @@ use std::{
     iter::once,
     mem::{size_of, transmute},
     path::PathBuf,
-    ptr::{null_mut, swap},
+    ptr::{addr_of_mut, null_mut, swap},
 };
 use windows::{
     core::*,
@@ -77,7 +77,7 @@ impl Default for Win32DebugTimeMarker {
     }
 }
 
-//Global for now, change later
+//Globals for now, change later
 static mut GLOBAL_RUNNING: bool = true;
 static mut GLOBAL_PAUSE: bool = false;
 static mut PERF_COUNTER_FREQ: i64 = 0;
@@ -148,6 +148,23 @@ struct Win32GameCode {
     update_and_render: Option<GameUpdateAndRender>,
 }
 
+struct Win32State {
+    total_size: u64,
+    game_memory_block: *mut c_void,
+
+    recording_handle: HANDLE,
+    input_recording_index: u32,
+
+    playback_handle: HANDLE,
+    input_playing_index: u32,
+}
+
+impl Default for Win32State {
+    fn default() -> Self {
+        unsafe { ::core::mem::zeroed() }
+    }
+}
+
 fn win32_get_last_write_time(filename: PCWSTR) -> FILETIME {
     let mut last_write_time: FILETIME = Default::default();
 
@@ -168,6 +185,7 @@ fn win32_get_last_write_time(filename: PCWSTR) -> FILETIME {
     last_write_time
 }
 
+#[no_mangle]
 fn win32_load_game_code(source_dll_name: PCWSTR, temp_dll_name: PCWSTR) -> Win32GameCode {
     let mut result = Win32GameCode {
         game_code_dll: None,
@@ -369,7 +387,10 @@ fn win32_process_input_stick_value(value: i16, dead_zone_threshold: u16) -> f32 
     x
 }
 
-fn win32_process_pending_messages(keyboard_controller: &mut GameControllerInput) {
+fn win32_process_pending_messages(
+    win32_state: &mut Win32State,
+    keyboard_controller: &mut GameControllerInput,
+) {
     let mut msg = MSG::default();
 
     unsafe {
@@ -504,8 +525,27 @@ fn win32_process_pending_messages(keyboard_controller: &mut GameControllerInput)
                                 }
                             }
                             WPARAM(0x50) => {
+                                //P Key
                                 if is_down {
                                     GLOBAL_PAUSE = !GLOBAL_PAUSE;
+                                }
+                            }
+                            WPARAM(0x4C) => {
+                                //L Key
+                                if is_down {
+                                    if win32_state.input_recording_index == 0 {
+                                        if let Err(e) = win32_begin_recording_input(win32_state, 1)
+                                        {
+                                            dbg!(e);
+                                        }
+                                    } else {
+                                        if let Err(e) = win32_end_recording_input(win32_state) {
+                                            dbg!(e);
+                                        }
+                                        if let Err(e) = win32_begin_input_playback(win32_state, 1) {
+                                            dbg!(e);
+                                        };
+                                    }
                                 }
                             }
                             WPARAM(_) => {}
@@ -794,7 +834,7 @@ pub fn win32_fill_sound_buffer(
 pub fn win32_init_d_sound(window: HWND, samples_per_second: u32, buffer_size: u32) -> Result<()> {
     // Define WaveFormat here since we're going to use it for multiple buffers
     let mut wave_format = WAVEFORMATEX::default();
-    wave_format.wFormatTag = WAVE_FORMAT_PCM as u16; // Why the struct takes u16 when all the enum variants are u32?
+    wave_format.wFormatTag = WAVE_FORMAT_PCM as u16; // Why does the struct take u16 when all the enum variants are u32?
     wave_format.nChannels = 2;
     wave_format.nSamplesPerSec = samples_per_second;
     wave_format.wBitsPerSample = 16;
@@ -808,7 +848,7 @@ pub fn win32_init_d_sound(window: HWND, samples_per_second: u32, buffer_size: u3
     A solution might be to just returning the buffer from the function, but that seems to cause the same problem */
 
     unsafe {
-        DirectSoundCreate8(None, &mut DIRECT_SOUND, None).unwrap_or_else(|e| {
+        DirectSoundCreate8(None, addr_of_mut!(DIRECT_SOUND), None).unwrap_or_else(|e| {
             dbg!(e);
         });
         DIRECT_SOUND
@@ -861,7 +901,7 @@ pub fn win32_init_d_sound(window: HWND, samples_per_second: u32, buffer_size: u3
         DIRECT_SOUND
             .as_ref()
             .unwrap()
-            .CreateSoundBuffer(&buffer_description, &mut SECONDARY_BUFFER, None)
+            .CreateSoundBuffer(&buffer_description, addr_of_mut!(SECONDARY_BUFFER), None)
             .unwrap_or_else(|e| {
                 dbg!(e);
             });
@@ -882,8 +922,9 @@ pub fn win32_get_window_dimension(window: HWND) -> Result<(i32, i32)> {
     Ok((width, height))
 }
 
-pub fn win32_resize_dib_section(buffer: &mut Win32OffscreenBuffer, width: i32, height: i32) {
+pub fn win32_resize_dib_section(buffer: *mut Win32OffscreenBuffer, width: i32, height: i32) {
     unsafe {
+        let buffer = &mut *(buffer);
         if !buffer.memory.is_null() {
             VirtualFree(buffer.memory, 0, MEM_RELEASE).unwrap_or_else(|e| {
                 dbg!(e);
@@ -896,7 +937,7 @@ pub fn win32_resize_dib_section(buffer: &mut Win32OffscreenBuffer, width: i32, h
 
         buffer.info.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
         buffer.info.bmiHeader.biWidth = buffer.width;
-        //Negative height means the bitmap is a top-down DIB and it's origin is the upper-left corner. Rows in window go sequentially from top to bottom.
+        // Negative height means the bitmap is a top-down DIB and it's origin is the upper-left corner. Rows in window go sequentially from top to bottom.
         buffer.info.bmiHeader.biHeight = -buffer.height;
         buffer.info.bmiHeader.biPlanes = 1;
         buffer.info.bmiHeader.biBitCount = 32;
@@ -908,8 +949,7 @@ pub fn win32_resize_dib_section(buffer: &mut Win32OffscreenBuffer, width: i32, h
             bit_map_memory_size,
             MEM_RESERVE | MEM_COMMIT,
             PAGE_READWRITE,
-        )
-        .cast();
+        );
 
         // Pitch determies when a new row starts in the sequence of bytes in the bitmap.
         buffer.pitch = (width * buffer.bytes_per_pixel) as usize;
@@ -943,7 +983,7 @@ fn win32_display_buffer_in_window(
     }
 }
 
-unsafe extern "system" fn win32_main_window_callback(
+extern "system" fn win32_main_window_callback(
     window: HWND,
     msg: u32,
     wparam: WPARAM,
@@ -976,7 +1016,7 @@ unsafe extern "system" fn win32_main_window_callback(
                     Ok(dimension) => {
                         win32_display_buffer_in_window(
                             device_context,
-                            &GLOBAL_BACK_BUFFER,
+                            GLOBAL_BACK_BUFFER.can_into(),
                             dimension.0,
                             dimension.1,
                         );
@@ -999,7 +1039,7 @@ unsafe extern "system" fn win32_main_window_callback(
 
 pub fn win32_main() -> Result<()> {
     unsafe {
-        QueryPerformanceFrequency(&mut PERF_COUNTER_FREQ).unwrap();
+        QueryPerformanceFrequency(addr_of_mut!(PERF_COUNTER_FREQ)).unwrap();
 
         let dll_dir_path = current_exe().unwrap().parent().unwrap().join("deps");
 
@@ -1026,7 +1066,7 @@ pub fn win32_main() -> Result<()> {
 
         let mut window_class = WNDCLASSW::default();
 
-        win32_resize_dib_section(&mut GLOBAL_BACK_BUFFER, 1280, 720);
+        win32_resize_dib_section(addr_of_mut!(GLOBAL_BACK_BUFFER), 1280, 720);
         window_class.style = CS_HREDRAW | CS_VREDRAW;
         window_class.lpfnWndProc = Some(win32_main_window_callback);
         window_class.hInstance = GetModuleHandleW(PCWSTR::null()).unwrap().into();
@@ -1087,6 +1127,7 @@ pub fn win32_main() -> Result<()> {
                         dbg!(e);
                     });
 
+                let mut win32_state: Win32State = Default::default();
                 GLOBAL_RUNNING = true;
 
                 let samples = VirtualAlloc(
@@ -1113,14 +1154,17 @@ pub fn win32_main() -> Result<()> {
                     debug_platform_write_entire_file,
                 };
 
-                let total_size =
+                win32_state.total_size =
                     game_memory.permanent_storage_size + game_memory.transient_storage_size;
-                game_memory.permanent_storage = VirtualAlloc(
+
+                win32_state.game_memory_block = VirtualAlloc(
                     base_address,
-                    total_size as usize,
+                    win32_state.total_size as usize,
                     MEM_RESERVE | MEM_COMMIT,
                     PAGE_READWRITE,
                 );
+
+                game_memory.permanent_storage = win32_state.game_memory_block;
 
                 game_memory.transient_storage = (game_memory.permanent_storage as *mut u8)
                     .add(game_memory.permanent_storage_size as usize)
@@ -1175,7 +1219,7 @@ pub fn win32_main() -> Result<()> {
                                 old_keyboard_controller.button_state.buttons[button_index]
                                     .ended_down;
                         }
-                        win32_process_pending_messages(new_keyboard_controller);
+                        win32_process_pending_messages(&mut win32_state, new_keyboard_controller);
 
                         if !GLOBAL_PAUSE {
                             //CONTROLLER INPUT
@@ -1366,7 +1410,16 @@ pub fn win32_main() -> Result<()> {
                                 width: GLOBAL_BACK_BUFFER.width,
                                 height: GLOBAL_BACK_BUFFER.height,
                                 pitch: GLOBAL_BACK_BUFFER.pitch,
+                                bytes_per_pixel: GLOBAL_BACK_BUFFER.bytes_per_pixel,
                             };
+
+                            if win32_state.input_recording_index == 1 {
+                                win32_record_input(&win32_state, new_input);
+                            }
+
+                            if win32_state.input_playing_index == 1 {
+                                win32_playback_input(&mut win32_state, new_input);
+                            }
 
                             if let Some(game_update_and_render) = game.update_and_render {
                                 game_update_and_render(&buffer, new_input, &mut game_memory);
@@ -1545,7 +1598,7 @@ pub fn win32_main() -> Result<()> {
 
                             #[cfg(feature = "gaming_internal")]
                             win32_debug_sync_display(
-                                &GLOBAL_BACK_BUFFER,
+                                GLOBAL_BACK_BUFFER.can_into(),
                                 debug_time_markers.len(),
                                 debug_time_markers.as_ref(),
                                 debug_time_marker_index as i32 - 1,
@@ -1555,7 +1608,7 @@ pub fn win32_main() -> Result<()> {
 
                             win32_display_buffer_in_window(
                                 device_context,
-                                &GLOBAL_BACK_BUFFER,
+                                GLOBAL_BACK_BUFFER.can_into(),
                                 dimension.0,
                                 dimension.1,
                             );
@@ -1625,6 +1678,160 @@ pub fn win32_main() -> Result<()> {
             }
         }
     }
+
+    Ok(())
+}
+
+fn win32_playback_input(win32_state: &mut Win32State, new_input: &mut GameInput) {
+    let mut bytes_read: u32 = 0;
+    let memory_size = size_of::<GameInput>();
+    unsafe {
+        let read_buffer = new_input as *mut game::gaming_engine::GameInput as *mut u8;
+        match ReadFile(
+            win32_state.playback_handle,
+            Some(std::slice::from_raw_parts_mut(read_buffer, memory_size)),
+            Some(&mut bytes_read),
+            None,
+        ) {
+            Ok(()) => {
+                if bytes_read == 0 {
+                    let playing_index = win32_state.input_playing_index;
+                    win32_end_input_playback(win32_state).unwrap();
+                    win32_begin_input_playback(win32_state, playing_index).unwrap()
+                }
+            }
+            Err(e) => {
+                dbg!(e);
+            }
+        }
+    }
+}
+
+fn win32_record_input(win32_state: &Win32State, new_input: &mut GameInput) {
+    let mut bytes_written: u32 = 0;
+    let memory_size = size_of::<GameInput>();
+    unsafe {
+        let write_buffer = new_input as *mut game::gaming_engine::GameInput as *mut u8;
+        match WriteFile(
+            win32_state.recording_handle,
+            Some(std::slice::from_raw_parts_mut(write_buffer, memory_size)),
+            Some(&mut bytes_written),
+            None,
+        ) {
+            Ok(()) => {
+                debug_assert!(bytes_written == memory_size as u32);
+                // File is read successfully, dont know if something should happen here
+            }
+            Err(e) => {
+                dbg!(e);
+            }
+        }
+    }
+}
+
+fn win32_begin_recording_input(win32_state: &mut Win32State, recording_index: u32) -> Result<()> {
+    win32_state.input_recording_index = recording_index;
+    unsafe {
+        let filename = "test.test";
+
+        win32_state.recording_handle = CreateFileW(
+            &HSTRING::from(filename),
+            GENERIC_WRITE.0,
+            FILE_SHARE_NONE,
+            None,
+            CREATE_ALWAYS,
+            FILE_FLAGS_AND_ATTRIBUTES(0),
+            HANDLE(0),
+        )?;
+
+        let bytes_to_write = win32_state.total_size as u32;
+
+        debug_assert!(win32_state.total_size == bytes_to_write as u64);
+
+        let mut bytes_written: u32 = 0;
+        let write_buffer =
+            win32_state.game_memory_block as *mut game::gaming_engine::GameMemory as *mut u8;
+        match WriteFile(
+            win32_state.recording_handle,
+            Some(std::slice::from_raw_parts_mut(
+                write_buffer,
+                bytes_to_write as usize,
+            )),
+            Some(&mut bytes_written),
+            None,
+        ) {
+            Ok(()) => {
+                debug_assert!(bytes_written == win32_state.total_size as u32);
+                // File is read successfully, dont know if something should happen here
+            }
+            Err(e) => {
+                dbg!(e);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn win32_end_recording_input(win32_state: &mut Win32State) -> Result<()> {
+    unsafe { CloseHandle(win32_state.recording_handle)? }
+
+    win32_state.input_recording_index = 0;
+
+    Ok(())
+}
+
+fn win32_begin_input_playback(
+    win32_state: &mut Win32State,
+    input_playing_index: u32,
+) -> Result<()> {
+    win32_state.input_playing_index = input_playing_index;
+    unsafe {
+        let filename = "test.test";
+
+        win32_state.playback_handle = CreateFileW(
+            &HSTRING::from(filename),
+            GENERIC_READ.0,
+            FILE_SHARE_READ,
+            None,
+            OPEN_EXISTING,
+            FILE_FLAGS_AND_ATTRIBUTES(0),
+            HANDLE(0),
+        )?;
+
+        // Downcast size because we dont want to read beyond 32 bit
+        let bytes_to_read = win32_state.total_size as u32;
+
+        //Upcast bytes_to_read because we cant compare otherwise
+        debug_assert!(win32_state.total_size == bytes_to_read as u64);
+
+        let mut bytes_read: u32 = 0;
+
+        let read_buffer =
+            win32_state.game_memory_block as *mut game::gaming_engine::GameMemory as *mut u8;
+        match ReadFile(
+            win32_state.playback_handle,
+            Some(std::slice::from_raw_parts_mut(
+                read_buffer,
+                bytes_to_read as usize,
+            )),
+            Some(&mut bytes_read),
+            None,
+        ) {
+            Ok(()) => {}
+            Err(e) => {
+                dbg!(e);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn win32_end_input_playback(win32_state: &mut Win32State) -> Result<()> {
+    unsafe { CloseHandle(win32_state.playback_handle)? }
+
+    win32_state.input_playing_index = 0;
 
     Ok(())
 }

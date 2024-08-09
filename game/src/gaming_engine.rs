@@ -17,6 +17,7 @@ pub struct GameOffscreenBuffer {
     pub height: i32,
     pub memory: *mut c_void,
     pub pitch: usize,
+    pub bytes_per_pixel: i32,
 }
 
 impl Default for GameOffscreenBuffer {
@@ -130,6 +131,9 @@ pub struct GameState {
     pub tone_hz: u32,
 
     pub t_sine: f32,
+
+    pub player_x: i32,
+    pub player_y: i32,
 }
 
 #[inline]
@@ -151,7 +155,7 @@ pub fn render_gradient(buffer: &GameOffscreenBuffer, blue_offset: i32, green_off
                 let green = (y + green_offset) & 0xFF;
 
                 // Shift green up by 8 bits from bottom, to make them sit in the green channel and not overwrite the blue channel (little endian)
-                *pixel = ((green << 8) | blue) as u32;
+                *pixel = ((green << 16) | blue) as u32;
                 pixel = pixel.add(1);
             }
 
@@ -160,6 +164,33 @@ pub fn render_gradient(buffer: &GameOffscreenBuffer, blue_offset: i32, green_off
     }
 }
 
+#[no_mangle]
+pub fn render_player(buffer: &GameOffscreenBuffer, player_x: i32, player_y: i32) {
+    unsafe {
+        let end_of_buffer = buffer.memory.offset(
+            (buffer.bytes_per_pixel * buffer.width + buffer.pitch as i32 * buffer.height) as isize,
+        );
+
+        let color: u32 = 0xFFFFFFFF;
+        let top = player_y;
+        let bottom = player_y + 10;
+        for x in player_x..player_x + 10 {
+            let mut pixel = buffer.memory as *mut u8;
+
+            pixel = pixel.add((x * buffer.bytes_per_pixel) as usize);
+            pixel = pixel.add((top * buffer.pitch as i32) as usize);
+
+            for _y in top..bottom {
+                if (pixel >= buffer.memory as *mut u8) && pixel < end_of_buffer as *mut u8 {
+                    *(pixel as *mut u32) = color;
+                    pixel = pixel.add(buffer.pitch);
+                }
+            }
+        }
+    }
+}
+
+#[no_mangle]
 pub fn game_output_sound(
     game_state: &mut GameState,
     sound_buffer: &GameSoundOutputBuffer,
@@ -171,16 +202,17 @@ pub fn game_output_sound(
     let mut sample_out = sound_buffer.samples;
     for _ in 0..sound_buffer.sample_count {
         unsafe {
-            let sine_value: f32 = (*game_state).t_sine.sin();
-            let sample_value: i16 = (sine_value * tone_volume) as i16;
+            // let sine_value: f32 = game_state.t_sine.sin();
+            // let sample_value: i16 = (sine_value * tone_volume) as i16;
+            let sample_value = 0;
             *sample_out = sample_value;
             sample_out = sample_out.add(1);
             *sample_out = sample_value;
             sample_out = sample_out.add(1);
 
-            (*game_state).t_sine += 2.0 * PI / wave_period as f32;
-            if (*game_state).t_sine > 2.0 * PI {
-                (*game_state).t_sine -= 2.0 * PI;
+            game_state.t_sine += 2.0 * PI / wave_period as f32;
+            if game_state.t_sine > 2.0 * PI {
+                game_state.t_sine -= 2.0 * PI;
             }
         }
     }
@@ -188,9 +220,9 @@ pub fn game_output_sound(
 
 #[no_mangle]
 pub fn game_get_sound_samples(memory: &mut GameMemory, sound_buffer: &GameSoundOutputBuffer) {
-    let game_state = memory.permanent_storage as *mut GameState;
     unsafe {
-        game_output_sound(transmute(game_state), sound_buffer, (*game_state).tone_hz);
+        let game_state = transmute::<*mut c_void, &mut GameState>(memory.permanent_storage);
+        game_output_sound(game_state, sound_buffer, game_state.tone_hz);
     }
 }
 
@@ -207,7 +239,8 @@ pub fn game_update_and_render(
     debug_assert!(size_of::<GameState>() <= memory.permanent_storage_size.try_into().unwrap());
 
     unsafe {
-        let game_state = memory.permanent_storage as *mut GameState;
+        let game_state = transmute::<*mut c_void, &mut GameState>(memory.permanent_storage);
+
         if !memory.is_initialized {
             #[cfg(feature = "gaming_internal")]
             {
@@ -231,50 +264,54 @@ pub fn game_update_and_render(
                 };
             }
 
-            (*game_state).t_sine = 0.0;
-            (*game_state).tone_hz = 256;
+            game_state.t_sine = 0.0;
+            game_state.tone_hz = 256;
+
+            game_state.player_x = 100;
+            game_state.player_y = 100;
+
             memory.is_initialized = true;
         }
 
         for controller_index in 0..input.controllers.len() {
             let controller = get_controller(input, controller_index);
             if controller.is_analog {
-                (*game_state).blue_offset += (4.0 * controller.stick_average_x) as i32;
-                (*game_state).tone_hz = 256 + ((128.0 * controller.stick_average_y) as u32);
+                game_state.blue_offset += (4.0 * controller.stick_average_x) as i32;
+                game_state.tone_hz = 256 + ((128.0 * controller.stick_average_y) as u32);
             } else {
-                if controller
-                    .button_state
-                    .concrete_buttons
-                    .move_left
-                    .ended_down
-                {
-                    (*game_state).blue_offset -= 1;
-                }
-
-                if controller
-                    .button_state
-                    .concrete_buttons
-                    .move_right
-                    .ended_down
-                {
-                    (*game_state).blue_offset += 1;
-                }
+            }
+            if controller
+                .button_state
+                .concrete_buttons
+                .move_left
+                .ended_down
+            {
+                game_state.player_x -= 5;
             }
 
             if controller
                 .button_state
                 .concrete_buttons
-                .action_down
+                .move_right
                 .ended_down
             {
-                (*game_state).green_offset += 1;
+                game_state.player_x += 5;
+            }
+            if controller.button_state.concrete_buttons.move_up.ended_down {
+                game_state.player_y -= 5;
+            }
+
+            if controller
+                .button_state
+                .concrete_buttons
+                .move_down
+                .ended_down
+            {
+                game_state.player_y += 5;
             }
         }
 
-        render_gradient(
-            buffer,
-            (*game_state).blue_offset,
-            (*game_state).green_offset,
-        );
+        render_gradient(buffer, game_state.blue_offset, game_state.green_offset);
+        render_player(buffer, game_state.player_x, game_state.player_y);
     }
 }
