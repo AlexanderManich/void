@@ -6,7 +6,6 @@ use std::{
     env::current_exe,
     ffi::c_void,
     io,
-    iter::once,
     mem::{size_of, transmute},
     path::PathBuf,
     ptr::{addr_of_mut, null_mut, swap},
@@ -157,36 +156,50 @@ struct Win32State {
 
     playback_handle: HANDLE,
     input_playing_index: u32,
+
+    exe_full_path: PathBuf,
+    exe_name: String,
 }
 
 impl Default for Win32State {
     fn default() -> Self {
-        unsafe { ::core::mem::zeroed() }
+        Self {
+            total_size: 0,
+            game_memory_block: null_mut(),
+            recording_handle: HANDLE(0),
+            input_recording_index: 0,
+            playback_handle: HANDLE(0),
+            input_playing_index: 0,
+            exe_full_path: PathBuf::new(),
+            exe_name: String::new(),
+        }
     }
 }
 
-fn win32_get_last_write_time(filename: PCWSTR) -> FILETIME {
+fn win32_get_last_write_time(file_name: &HSTRING) -> FILETIME {
     let mut last_write_time: FILETIME = Default::default();
 
-    let mut find_data: WIN32_FIND_DATAW = Default::default();
+    let mut data: WIN32_FILE_ATTRIBUTE_DATA = Default::default();
     unsafe {
-        match FindFirstFileW(filename, &mut find_data) {
-            Ok(find_handle) => {
-                last_write_time = find_data.ftLastWriteTime;
-                if let Err(e) = FindClose(find_handle) {
-                    dbg!(e);
-                };
+        match GetFileAttributesExW(
+            file_name,
+            GetFileExInfoStandard,
+            &mut data as *mut _ as *mut c_void,
+        ) {
+            Ok(()) => {
+                last_write_time = data.ftLastWriteTime;
             }
             Err(e) => {
                 dbg!(e);
             }
-        }
-    };
+        };
+    }
+
     last_write_time
 }
 
 #[no_mangle]
-fn win32_load_game_code(source_dll_name: PCWSTR, temp_dll_name: PCWSTR) -> Win32GameCode {
+fn win32_load_game_code(source_dll_name: &HSTRING, temp_dll_name: &HSTRING) -> Win32GameCode {
     let mut result = Win32GameCode {
         game_code_dll: None,
         dll_last_write_time: Default::default(),
@@ -201,7 +214,7 @@ fn win32_load_game_code(source_dll_name: PCWSTR, temp_dll_name: PCWSTR) -> Win32
             dbg!(e);
         }
 
-        match LoadLibraryW(PCWSTR(temp_dll_name.as_ptr())) {
+        match LoadLibraryW(temp_dll_name) {
             Ok(hmodule) => {
                 result.game_code_dll = Some(hmodule);
                 let p = GetProcAddress(hmodule, s!("game_get_sound_samples"));
@@ -562,20 +575,14 @@ fn win32_process_pending_messages(
 }
 
 #[no_mangle]
-pub fn debug_platform_read_entire_file(filename: PathBuf) -> io::Result<DebugReadFileResult> {
+pub fn debug_platform_read_entire_file(file_name: PathBuf) -> io::Result<DebugReadFileResult> {
     unsafe {
         let mut result: DebugReadFileResult = Default::default();
 
-        let filename_utf16 = filename
-            .into_os_string()
-            .into_string()
-            .unwrap()
-            .encode_utf16()
-            .chain(once(0))
-            .collect::<Vec<u16>>();
+        let file_name = &HSTRING::from(file_name.as_os_str());
 
         let file_handle = CreateFileW(
-            PCWSTR(filename_utf16.as_ptr()),
+            file_name,
             GENERIC_READ.0,
             FILE_SHARE_READ,
             None,
@@ -635,21 +642,15 @@ pub fn debug_platform_free_file_memory(memory: *mut c_void) {
 }
 
 pub fn debug_platform_write_entire_file(
-    filename: PathBuf,
+    file_name: PathBuf,
     memory_size: u32,
     memory: *mut c_void,
 ) -> io::Result<()> {
     unsafe {
-        let filename_utf16 = filename
-            .into_os_string()
-            .into_string()
-            .unwrap()
-            .encode_utf16()
-            .chain(once(0))
-            .collect::<Vec<u16>>();
+        let file_name = &HSTRING::from(file_name.as_os_str());
 
         let file_handle = CreateFileW(
-            PCWSTR(filename_utf16.as_ptr()),
+            file_name,
             GENERIC_WRITE.0,
             FILE_SHARE_NONE,
             None,
@@ -969,8 +970,8 @@ fn win32_display_buffer_in_window(
             device_context,
             0,
             0,
-            window_width,
-            window_height,
+            buffer.width,  //window_width,
+            buffer.height, //window_height,
             0,
             0,
             buffer.width,
@@ -1003,7 +1004,18 @@ extern "system" fn win32_main_window_callback(
                 // TODO: Handle this with a message to the user? (Are you sure you want to quit?)
             }
             WM_ACTIVATEAPP => {
-                // Called when window is opened?
+                // WPARAM is true or false depending on if window is active or not
+                // WPARAM(1) == TRUE, WPARAM(0) == FALSE
+                // if wparam == WPARAM(1) {
+                //     if let Err(e) = SetLayeredWindowAttributes(window, COLORREF(0), 255, LWA_ALPHA)
+                //     {
+                //         dbg!(e);
+                //     }
+                // } else if let Err(e) =
+                //     SetLayeredWindowAttributes(window, COLORREF(0), 128, LWA_ALPHA)
+                // {
+                //     dbg!(e);
+                // }
             }
             WM_SYSKEYDOWN | WM_SYSKEYUP | WM_KEYDOWN | WM_KEYUP => {
                 debug_assert!(false);
@@ -1041,24 +1053,18 @@ pub fn win32_main() -> Result<()> {
     unsafe {
         QueryPerformanceFrequency(addr_of_mut!(PERF_COUNTER_FREQ)).unwrap();
 
-        let dll_dir_path = current_exe().unwrap().parent().unwrap().join("deps");
+        let mut win32_state: Win32State = Default::default();
 
-        let source_game_code_dll_full_path = dll_dir_path
-            .join("game.dll")
-            .into_os_string()
-            .into_string()
-            .unwrap()
-            .encode_utf16()
-            .chain(once(0))
-            .collect::<Vec<u16>>();
-        let temp_game_code_dll_full_path = dll_dir_path
-            .join("temp_game.dll")
-            .into_os_string()
-            .into_string()
-            .unwrap()
-            .encode_utf16()
-            .chain(once(0))
-            .collect::<Vec<u16>>();
+        win32_get_exe_file_name(&mut win32_state);
+
+        let mut dll_dir_path = PathBuf::new();
+        win32_build_exe_path_file_name(&win32_state, "deps".to_string(), &mut dll_dir_path);
+
+        let source_game_code_dll_full_path =
+            &HSTRING::from(dll_dir_path.join("game.dll").as_os_str());
+
+        let temp_game_code_dll_full_path =
+            &HSTRING::from(dll_dir_path.join("temp_game.dll").as_os_str());
 
         // Set schedular granularity to 1ms to make Sleep() more granular
         let desired_scheduler_ms = 1;
@@ -1073,15 +1079,9 @@ pub fn win32_main() -> Result<()> {
         // window_class.hIcon = ;
         window_class.lpszClassName = w!("GamingWindowClass");
 
-        // We should query and get the actual refresh rate of the monitor
-        const MONITER_REFRESH_HZ: usize = 60;
-        const GAME_UPDATE_HZ: usize = MONITER_REFRESH_HZ / 2;
-
-        let target_seconds_per_frame = 1.0 / GAME_UPDATE_HZ as f32;
-
         if RegisterClassW(&window_class) != 0 {
             let window = CreateWindowExW(
-                WINDOW_EX_STYLE(0),
+                WINDOW_EX_STYLE(0), // WS_EX_TOPMOST | WS_EX_LAYERED,
                 window_class.lpszClassName,
                 w!("Gaming"),
                 WS_OVERLAPPEDWINDOW | WS_VISIBLE,
@@ -1095,7 +1095,18 @@ pub fn win32_main() -> Result<()> {
                 None,
             );
             if window != HWND(0) {
-                let device_context = GetDC(window);
+                let refresh_dc = GetDC(window);
+                let mut monitor_refresh_hz = 60;
+                let win32_refresh_rate = GetDeviceCaps(refresh_dc, VREFRESH);
+                ReleaseDC(window, refresh_dc);
+
+                if win32_refresh_rate > 1 {
+                    monitor_refresh_hz = win32_refresh_rate;
+                }
+
+                // TODO: If game_update_hz is too big, sound starts bugging. Ideally It should be monitor_refresh_hz / 2
+                let game_update_hz: f32 = monitor_refresh_hz as f32 / 4.0;
+                let target_seconds_per_frame: f32 = 1.0 / game_update_hz;
 
                 let mut sound_output = Win32SoundOutput::default();
                 sound_output.samples_per_second = 48000;
@@ -1103,12 +1114,10 @@ pub fn win32_main() -> Result<()> {
                 sound_output.bytes_per_sample = size_of::<i16>() as u32 * 2;
                 sound_output.secondary_buffer_size =
                     sound_output.samples_per_second * sound_output.bytes_per_sample;
-                sound_output.latency_sample_count =
-                    2 * (sound_output.samples_per_second / GAME_UPDATE_HZ as u32);
-                sound_output.safety_bytes = (sound_output.samples_per_second
-                    * sound_output.bytes_per_sample
-                    / GAME_UPDATE_HZ as u32)
-                    / 3;
+                sound_output.safety_bytes = ((sound_output.samples_per_second as f32
+                    * sound_output.bytes_per_sample as f32
+                    / game_update_hz)
+                    / 3.0) as u32;
 
                 win32_init_d_sound(
                     window,
@@ -1127,7 +1136,6 @@ pub fn win32_main() -> Result<()> {
                         dbg!(e);
                     });
 
-                let mut win32_state: Win32State = Default::default();
                 GLOBAL_RUNNING = true;
 
                 let samples = VirtualAlloc(
@@ -1181,8 +1189,7 @@ pub fn win32_main() -> Result<()> {
                     let mut flip_wall_clock = win32_get_wall_clock();
 
                     let mut debug_time_marker_index: usize = 0;
-                    let mut debug_time_markers =
-                        [Win32DebugTimeMarker::default(); GAME_UPDATE_HZ / 2];
+                    let mut debug_time_markers = [Win32DebugTimeMarker::default(); 30];
 
                     let mut sound_is_valid = false;
                     let mut audio_latency_bytes = 0;
@@ -1190,22 +1197,19 @@ pub fn win32_main() -> Result<()> {
 
                     let mut last_cycle_count = _rdtsc();
 
-                    // I think the PCWSTR pointer gets dropped after a function is finished using it,
-                    // so you have to pass in a seperate pointer everywhere you want to use it.
                     let mut game: Win32GameCode = win32_load_game_code(
-                        PCWSTR(source_game_code_dll_full_path.as_ptr()),
-                        PCWSTR(temp_game_code_dll_full_path.as_ptr()),
+                        source_game_code_dll_full_path,
+                        temp_game_code_dll_full_path,
                     );
 
                     while GLOBAL_RUNNING {
-                        let new_dll_write_time = win32_get_last_write_time(PCWSTR(
-                            source_game_code_dll_full_path.as_ptr(),
-                        ));
+                        let new_dll_write_time =
+                            win32_get_last_write_time(source_game_code_dll_full_path);
                         if CompareFileTime(&new_dll_write_time, &game.dll_last_write_time) != 0 {
                             win32_unload_game_code(&mut game);
                             game = win32_load_game_code(
-                                PCWSTR(source_game_code_dll_full_path.as_ptr()),
-                                PCWSTR(temp_game_code_dll_full_path.as_ptr()),
+                                source_game_code_dll_full_path,
+                                temp_game_code_dll_full_path,
                             );
                         }
 
@@ -1241,6 +1245,8 @@ pub fn win32_main() -> Result<()> {
                                     == ERROR_SUCCESS.0
                                 {
                                     new_controller.is_connected = true;
+                                    new_controller.is_analog = old_controller.is_analog;
+
                                     //Controller is plugged in
                                     let pad = &controller_state.Gamepad;
 
@@ -1447,10 +1453,12 @@ pub fn win32_main() -> Result<()> {
                                         * sound_output.bytes_per_sample)
                                         % sound_output.secondary_buffer_size;
 
-                                    let expected_sound_bytes_per_frame = (sound_output
+                                    let expected_sound_bytes_per_frame: u32 = ((sound_output
                                         .samples_per_second
                                         * sound_output.bytes_per_sample)
-                                        / GAME_UPDATE_HZ as u32;
+                                        as f32
+                                        / game_update_hz)
+                                        as u32;
 
                                     let seconds_left_until_flip =
                                         target_seconds_per_frame - from_begin_to_audio_seconds;
@@ -1606,12 +1614,16 @@ pub fn win32_main() -> Result<()> {
                                 target_seconds_per_frame,
                             );
 
+                            let device_context = GetDC(window);
+
                             win32_display_buffer_in_window(
                                 device_context,
                                 GLOBAL_BACK_BUFFER.can_into(),
                                 dimension.0,
                                 dimension.1,
                             );
+
+                            ReleaseDC(window, device_context);
 
                             flip_wall_clock = win32_get_wall_clock();
 
@@ -1671,7 +1683,7 @@ pub fn win32_main() -> Result<()> {
                     dbg!(game_memory.permanent_storage);
                 }
 
-                ReleaseDC(window, device_context);
+                // ReleaseDC(window, device_context);
             } else {
                 //Logging
                 dbg!(window);
@@ -1697,7 +1709,15 @@ fn win32_playback_input(win32_state: &mut Win32State, new_input: &mut GameInput)
                 if bytes_read == 0 {
                     let playing_index = win32_state.input_playing_index;
                     win32_end_input_playback(win32_state).unwrap();
-                    win32_begin_input_playback(win32_state, playing_index).unwrap()
+                    win32_begin_input_playback(win32_state, playing_index).unwrap();
+                    if let Err(e) = ReadFile(
+                        win32_state.playback_handle,
+                        Some(std::slice::from_raw_parts_mut(read_buffer, memory_size)),
+                        Some(&mut bytes_read),
+                        None,
+                    ) {
+                        dbg!(e);
+                    }
                 }
             }
             Err(e) => {
@@ -1729,13 +1749,14 @@ fn win32_record_input(win32_state: &Win32State, new_input: &mut GameInput) {
     }
 }
 
-fn win32_begin_recording_input(win32_state: &mut Win32State, recording_index: u32) -> Result<()> {
-    win32_state.input_recording_index = recording_index;
+fn win32_begin_recording_input(state: &mut Win32State, input_recording_index: u32) -> Result<()> {
+    state.input_recording_index = input_recording_index;
     unsafe {
-        let filename = "test.test";
+        let mut file_name = PathBuf::new();
+        win32_get_input_file_location(state, input_recording_index, &mut file_name);
 
-        win32_state.recording_handle = CreateFileW(
-            &HSTRING::from(filename),
+        state.recording_handle = CreateFileW(
+            &HSTRING::from(file_name.as_os_str()),
             GENERIC_WRITE.0,
             FILE_SHARE_NONE,
             None,
@@ -1744,15 +1765,15 @@ fn win32_begin_recording_input(win32_state: &mut Win32State, recording_index: u3
             HANDLE(0),
         )?;
 
-        let bytes_to_write = win32_state.total_size as u32;
+        let bytes_to_write = state.total_size as u32;
 
-        debug_assert!(win32_state.total_size == bytes_to_write as u64);
+        debug_assert!(state.total_size == bytes_to_write as u64);
 
         let mut bytes_written: u32 = 0;
         let write_buffer =
-            win32_state.game_memory_block as *mut game::gaming_engine::GameMemory as *mut u8;
+            state.game_memory_block as *mut game::gaming_engine::GameMemory as *mut u8;
         match WriteFile(
-            win32_state.recording_handle,
+            state.recording_handle,
             Some(std::slice::from_raw_parts_mut(
                 write_buffer,
                 bytes_to_write as usize,
@@ -1761,7 +1782,7 @@ fn win32_begin_recording_input(win32_state: &mut Win32State, recording_index: u3
             None,
         ) {
             Ok(()) => {
-                debug_assert!(bytes_written == win32_state.total_size as u32);
+                debug_assert!(bytes_written == state.total_size as u32);
                 // File is read successfully, dont know if something should happen here
             }
             Err(e) => {
@@ -1781,16 +1802,14 @@ fn win32_end_recording_input(win32_state: &mut Win32State) -> Result<()> {
     Ok(())
 }
 
-fn win32_begin_input_playback(
-    win32_state: &mut Win32State,
-    input_playing_index: u32,
-) -> Result<()> {
-    win32_state.input_playing_index = input_playing_index;
+fn win32_begin_input_playback(state: &mut Win32State, input_playing_index: u32) -> Result<()> {
+    state.input_playing_index = input_playing_index;
     unsafe {
-        let filename = "test.test";
+        let mut file_name = PathBuf::new();
+        win32_get_input_file_location(state, input_playing_index, &mut file_name);
 
-        win32_state.playback_handle = CreateFileW(
-            &HSTRING::from(filename),
+        state.playback_handle = CreateFileW(
+            &HSTRING::from(file_name.as_os_str()),
             GENERIC_READ.0,
             FILE_SHARE_READ,
             None,
@@ -1800,17 +1819,17 @@ fn win32_begin_input_playback(
         )?;
 
         // Downcast size because we dont want to read beyond 32 bit
-        let bytes_to_read = win32_state.total_size as u32;
+        let bytes_to_read = state.total_size as u32;
 
         //Upcast bytes_to_read because we cant compare otherwise
-        debug_assert!(win32_state.total_size == bytes_to_read as u64);
+        debug_assert!(state.total_size == bytes_to_read as u64);
 
         let mut bytes_read: u32 = 0;
 
         let read_buffer =
-            win32_state.game_memory_block as *mut game::gaming_engine::GameMemory as *mut u8;
+            state.game_memory_block as *mut game::gaming_engine::GameMemory as *mut u8;
         match ReadFile(
-            win32_state.playback_handle,
+            state.playback_handle,
             Some(std::slice::from_raw_parts_mut(
                 read_buffer,
                 bytes_to_read as usize,
@@ -1834,4 +1853,21 @@ fn win32_end_input_playback(win32_state: &mut Win32State) -> Result<()> {
     win32_state.input_playing_index = 0;
 
     Ok(())
+}
+
+fn win32_get_exe_file_name(state: &mut Win32State) {
+    let exe_path = current_exe().unwrap();
+
+    state.exe_full_path = exe_path.clone();
+    state.exe_name = exe_path.file_name().unwrap().to_str().unwrap().to_string();
+}
+
+fn win32_build_exe_path_file_name(state: &Win32State, file_name: String, dest: &mut PathBuf) {
+    let path = state.exe_full_path.parent().unwrap().join(file_name);
+    dest.push(path);
+}
+
+fn win32_get_input_file_location(state: &Win32State, slot_index: u32, dest: &mut PathBuf) {
+    debug_assert!(slot_index == 1);
+    win32_build_exe_path_file_name(state, "loop_playback.pb".to_string(), dest);
 }

@@ -128,8 +128,8 @@ pub struct GameMemory {
 pub struct GameState {
     pub blue_offset: i32,
     pub green_offset: i32,
-    pub tone_hz: u32,
 
+    pub tone_hz: u32,
     pub t_sine: f32,
 
     pub player_x: i32,
@@ -167,9 +167,9 @@ pub fn render_gradient(buffer: &GameOffscreenBuffer, blue_offset: i32, green_off
 #[no_mangle]
 pub fn render_player(buffer: &GameOffscreenBuffer, player_x: i32, player_y: i32) {
     unsafe {
-        let end_of_buffer = buffer.memory.offset(
-            (buffer.bytes_per_pixel * buffer.width + buffer.pitch as i32 * buffer.height) as isize,
-        );
+        let end_of_buffer = buffer
+            .memory
+            .offset((buffer.pitch as i32 * buffer.height) as isize);
 
         let color: u32 = 0xFFFFFFFF;
         let top = player_y;
@@ -183,8 +183,8 @@ pub fn render_player(buffer: &GameOffscreenBuffer, player_x: i32, player_y: i32)
             for _y in top..bottom {
                 if (pixel >= buffer.memory as *mut u8) && pixel < end_of_buffer as *mut u8 {
                     *(pixel as *mut u32) = color;
-                    pixel = pixel.add(buffer.pitch);
                 }
+                pixel = pixel.add(buffer.pitch);
             }
         }
     }
@@ -202,9 +202,8 @@ pub fn game_output_sound(
     let mut sample_out = sound_buffer.samples;
     for _ in 0..sound_buffer.sample_count {
         unsafe {
-            // let sine_value: f32 = game_state.t_sine.sin();
-            // let sample_value: i16 = (sine_value * tone_volume) as i16;
-            let sample_value = 0;
+            let sine_value: f32 = game_state.t_sine.sin();
+            let sample_value: i16 = (sine_value * tone_volume) as i16;
             *sample_out = sample_value;
             sample_out = sample_out.add(1);
             *sample_out = sample_value;
@@ -244,13 +243,13 @@ pub fn game_update_and_render(
         if !memory.is_initialized {
             #[cfg(feature = "gaming_internal")]
             {
-                let filename = PathBuf::from(file!());
-                let output_filename = current_exe().unwrap().parent().unwrap().join("test.out");
+                let file_name = PathBuf::from(file!());
+                let output_file_name = current_exe().unwrap().parent().unwrap().join("test.out");
 
-                match (memory.debug_platform_read_entire_file)(filename) {
+                match (memory.debug_platform_read_entire_file)(file_name) {
                     Ok(file) => {
                         if let Err(e) = (memory.debug_platform_write_entire_file)(
-                            output_filename,
+                            output_file_name,
                             file.contents_size,
                             file.contents,
                         ) {
