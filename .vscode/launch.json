@@ -13,7 +13,8 @@
             "stopAtEntry": false,
             "cwd": "${workspaceRoot}",
             "console": "integratedTerminal",
-            "preLaunchTask": "rust: cargo build"
+            "preLaunchTask": "rust: cargo build",
+            "requireExactSource": false
         }
     ]
 }

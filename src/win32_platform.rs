@@ -3,12 +3,13 @@ use crate::macros::*;
 use game::gaming_engine::*;
 use std::{
     arch::x86_64::_rdtsc,
+    array,
     env::current_exe,
     ffi::c_void,
     io,
     mem::{size_of, transmute},
     path::PathBuf,
-    ptr::{addr_of_mut, null_mut, swap},
+    ptr::{self, addr_of_mut, null_mut, swap},
 };
 use windows::{
     core::*,
@@ -21,8 +22,21 @@ use windows::{
             TIMERR_NOERROR,
         },
         Storage::FileSystem::*,
-        System::{LibraryLoader::*, Memory::*, Performance::*, Threading::Sleep},
-        UI::{Input::XboxController::*, WindowsAndMessaging::*},
+        System::{
+            Diagnostics::Debug::OutputDebugStringW, LibraryLoader::*, Memory::*, Performance::*,
+            Threading::Sleep,
+        },
+        UI::{
+            Input::{
+                KeyboardAndMouse::{
+                    GetKeyState, VIRTUAL_KEY, VK_A, VK_D, VK_DOWN, VK_E, VK_ESCAPE, VK_F4, VK_L,
+                    VK_LBUTTON, VK_LEFT, VK_MBUTTON, VK_P, VK_Q, VK_RBUTTON, VK_RIGHT, VK_S,
+                    VK_SPACE, VK_UP, VK_W, VK_XBUTTON1, VK_XBUTTON2,
+                },
+                XboxController::*,
+            },
+            WindowsAndMessaging::*,
+        },
     },
 };
 
@@ -147,15 +161,30 @@ struct Win32GameCode {
     update_and_render: Option<GameUpdateAndRender>,
 }
 
+struct Win32ReplayBuffer {
+    replay_file_name: String,
+    memory_block: *mut c_void,
+}
+
+impl Default for Win32ReplayBuffer {
+    fn default() -> Self {
+        Self {
+            replay_file_name: String::new(),
+            memory_block: null_mut(),
+        }
+    }
+}
+
 struct Win32State {
     total_size: u64,
     game_memory_block: *mut c_void,
+    replay_buffers: [Win32ReplayBuffer; 4],
 
     recording_handle: HANDLE,
-    input_recording_index: u32,
+    input_recording_index: usize,
 
     playback_handle: HANDLE,
-    input_playing_index: u32,
+    input_playing_index: usize,
 
     exe_full_path: PathBuf,
     exe_name: String,
@@ -166,6 +195,7 @@ impl Default for Win32State {
         Self {
             total_size: 0,
             game_memory_block: null_mut(),
+            replay_buffers: core::array::from_fn(|_| Win32ReplayBuffer::default()),
             recording_handle: HANDLE(0),
             input_recording_index: 0,
             playback_handle: HANDLE(0),
@@ -413,158 +443,116 @@ fn win32_process_pending_messages(
                     GLOBAL_RUNNING = false;
                 }
                 WM_SYSKEYDOWN | WM_SYSKEYUP | WM_KEYDOWN | WM_KEYUP => {
-                    let vk_code = msg.wParam;
+                    let vk_code = msg.wParam.0 as u16;
                     let was_down = (msg.lParam.0 & (1 << 30)) != 0;
                     let is_down = (msg.lParam.0 & (1 << 31)) == 0;
+
                     //Check prevents repeat key presses when holding key
                     if was_down != is_down {
-                        match vk_code {
-                            WPARAM(0x57) => {
-                                //W key
-                                win32_process_keyboard_message(
-                                    &mut keyboard_controller.button_state.concrete_buttons.move_up,
-                                    is_down,
-                                )
-                            }
-                            WPARAM(0x41) => {
-                                //A key
-                                win32_process_keyboard_message(
-                                    &mut keyboard_controller
-                                        .button_state
-                                        .concrete_buttons
-                                        .move_left,
-                                    is_down,
-                                )
-                            }
-                            WPARAM(0x53) => {
-                                //S key
-                                win32_process_keyboard_message(
-                                    &mut keyboard_controller
-                                        .button_state
-                                        .concrete_buttons
-                                        .move_down,
-                                    is_down,
-                                )
-                            }
-                            WPARAM(0x44) => {
-                                //D key
-                                win32_process_keyboard_message(
-                                    &mut keyboard_controller
-                                        .button_state
-                                        .concrete_buttons
-                                        .move_right,
-                                    is_down,
-                                )
-                            }
-                            WPARAM(0x51) => {
-                                //Q Key
-                                win32_process_keyboard_message(
-                                    &mut keyboard_controller
-                                        .button_state
-                                        .concrete_buttons
-                                        .left_shoulder,
-                                    is_down,
-                                )
-                            }
-                            WPARAM(0x45) => {
-                                //E Key
-                                win32_process_keyboard_message(
-                                    &mut keyboard_controller
-                                        .button_state
-                                        .concrete_buttons
-                                        .right_shoulder,
-                                    is_down,
-                                )
-                            }
-                            WPARAM(0x26) => {
-                                //Up arrow
-                                win32_process_keyboard_message(
-                                    &mut keyboard_controller
-                                        .button_state
-                                        .concrete_buttons
-                                        .action_up,
-                                    is_down,
-                                );
-                            }
-                            WPARAM(0x25) => {
-                                //Left arrow
-                                win32_process_keyboard_message(
-                                    &mut keyboard_controller
-                                        .button_state
-                                        .concrete_buttons
-                                        .action_left,
-                                    is_down,
-                                );
-                            }
-                            WPARAM(0x28) => {
-                                //Down arrow
-                                win32_process_keyboard_message(
-                                    &mut keyboard_controller
-                                        .button_state
-                                        .concrete_buttons
-                                        .action_down,
-                                    is_down,
-                                );
-                            }
-                            WPARAM(0x27) => {
-                                //Right arrow
-                                win32_process_keyboard_message(
-                                    &mut keyboard_controller
-                                        .button_state
-                                        .concrete_buttons
-                                        .action_right,
-                                    is_down,
-                                );
-                            }
-                            WPARAM(0x1b) => {
-                                //Escape key
-                                win32_process_keyboard_message(
-                                    &mut keyboard_controller.button_state.concrete_buttons.start,
-                                    is_down,
-                                );
-                            }
-                            WPARAM(0x20) => {
-                                //Space key
-                                win32_process_keyboard_message(
-                                    &mut keyboard_controller.button_state.concrete_buttons.back,
-                                    is_down,
-                                );
-                            }
-                            WPARAM(0x73) => {
-                                //F4 key
+                        match VIRTUAL_KEY(vk_code) {
+                            VK_W => win32_process_keyboard_message(
+                                &mut keyboard_controller.button_state.concrete_buttons.move_up,
+                                is_down,
+                            ),
+                            VK_A => win32_process_keyboard_message(
+                                &mut keyboard_controller.button_state.concrete_buttons.move_left,
+                                is_down,
+                            ),
+                            VK_S => win32_process_keyboard_message(
+                                &mut keyboard_controller.button_state.concrete_buttons.move_down,
+                                is_down,
+                            ),
+                            VK_D => win32_process_keyboard_message(
+                                &mut keyboard_controller.button_state.concrete_buttons.move_right,
+                                is_down,
+                            ),
+                            VK_Q => win32_process_keyboard_message(
+                                &mut keyboard_controller
+                                    .button_state
+                                    .concrete_buttons
+                                    .left_shoulder,
+                                is_down,
+                            ),
+                            VK_E => win32_process_keyboard_message(
+                                &mut keyboard_controller
+                                    .button_state
+                                    .concrete_buttons
+                                    .right_shoulder,
+                                is_down,
+                            ),
+                            VK_UP => win32_process_keyboard_message(
+                                &mut keyboard_controller.button_state.concrete_buttons.action_up,
+                                is_down,
+                            ),
+                            VK_LEFT => win32_process_keyboard_message(
+                                &mut keyboard_controller
+                                    .button_state
+                                    .concrete_buttons
+                                    .action_left,
+                                is_down,
+                            ),
+                            VK_DOWN => win32_process_keyboard_message(
+                                &mut keyboard_controller
+                                    .button_state
+                                    .concrete_buttons
+                                    .action_down,
+                                is_down,
+                            ),
+                            VK_RIGHT => win32_process_keyboard_message(
+                                &mut keyboard_controller
+                                    .button_state
+                                    .concrete_buttons
+                                    .action_right,
+                                is_down,
+                            ),
+                            VK_ESCAPE => win32_process_keyboard_message(
+                                &mut keyboard_controller.button_state.concrete_buttons.start,
+                                is_down,
+                            ),
+                            VK_SPACE => win32_process_keyboard_message(
+                                &mut keyboard_controller.button_state.concrete_buttons.back,
+                                is_down,
+                            ),
+                            VK_F4 => {
                                 let alt_key_was_down = (msg.lParam.0 & (1 << 29)) != 0;
                                 if alt_key_was_down {
                                     GLOBAL_RUNNING = false;
                                 }
                             }
-                            WPARAM(0x50) => {
-                                //P Key
+                            VK_P => {
                                 if is_down {
                                     GLOBAL_PAUSE = !GLOBAL_PAUSE;
                                 }
                             }
-                            WPARAM(0x4C) => {
-                                //L Key
+                            VK_L => {
                                 if is_down {
-                                    if win32_state.input_recording_index == 0 {
-                                        if let Err(e) = win32_begin_recording_input(win32_state, 1)
-                                        {
-                                            dbg!(e);
+                                    if win32_state.input_playing_index == 0 {
+                                        if win32_state.input_recording_index == 0 {
+                                            if let Err(e) =
+                                                win32_begin_recording_input(win32_state, 1)
+                                            {
+                                                dbg!(e);
+                                            }
+                                        } else {
+                                            if let Err(e) = win32_end_recording_input(win32_state) {
+                                                dbg!(e);
+                                            }
+                                            if let Err(e) =
+                                                win32_begin_input_playback(win32_state, 1)
+                                            {
+                                                dbg!(e);
+                                            };
                                         }
-                                    } else {
-                                        if let Err(e) = win32_end_recording_input(win32_state) {
-                                            dbg!(e);
-                                        }
-                                        if let Err(e) = win32_begin_input_playback(win32_state, 1) {
-                                            dbg!(e);
-                                        };
+                                    } else if let Err(e) = win32_end_input_playback(win32_state) {
+                                        dbg!(e);
                                     }
                                 }
                             }
-                            WPARAM(_) => {}
+                            _ => {}
                         }
                     }
                 }
+
                 _ => {
                     TranslateMessage(&msg);
                     DispatchMessageW(&msg);
@@ -575,7 +563,10 @@ fn win32_process_pending_messages(
 }
 
 #[no_mangle]
-pub fn debug_platform_read_entire_file(file_name: PathBuf) -> io::Result<DebugReadFileResult> {
+pub fn debug_platform_read_entire_file(
+    thread: &ThreadContext,
+    file_name: PathBuf,
+) -> io::Result<DebugReadFileResult> {
     unsafe {
         let mut result: DebugReadFileResult = Default::default();
 
@@ -619,7 +610,7 @@ pub fn debug_platform_read_entire_file(file_name: PathBuf) -> io::Result<DebugRe
                     result.contents_size = file_size32;
                 }
                 Err(e) => {
-                    debug_platform_free_file_memory(result.contents);
+                    debug_platform_free_file_memory(&thread, result.contents);
                     result.contents = std::ptr::null_mut();
                     dbg!(e);
                 }
@@ -631,7 +622,7 @@ pub fn debug_platform_read_entire_file(file_name: PathBuf) -> io::Result<DebugRe
     }
 }
 
-pub fn debug_platform_free_file_memory(memory: *mut c_void) {
+pub fn debug_platform_free_file_memory(thread: &ThreadContext, memory: *mut c_void) {
     if !memory.is_null() {
         unsafe {
             if let Err(e) = VirtualFree(memory, 0, MEM_RELEASE) {
@@ -642,6 +633,7 @@ pub fn debug_platform_free_file_memory(memory: *mut c_void) {
 }
 
 pub fn debug_platform_write_entire_file(
+    thread: &ThreadContext,
     file_name: PathBuf,
     memory_size: u32,
     memory: *mut c_void,
@@ -687,9 +679,10 @@ pub fn debug_platform_write_entire_file(
 }
 
 fn win32_process_keyboard_message(new_state: &mut GameButtonState, is_down: bool) {
-    debug_assert!(new_state.ended_down != is_down);
-    new_state.ended_down = is_down;
-    new_state.half_transition_count += 1;
+    if new_state.ended_down != is_down {
+        new_state.ended_down = is_down;
+        new_state.half_transition_count += 1;
+    }
 }
 
 pub fn win32_process_xinput_digital_button(
@@ -964,12 +957,33 @@ fn win32_display_buffer_in_window(
     window_height: i32,
 ) {
     unsafe {
-        //Draw whole bitmap onto whole window initially
+        let offset_x = 10;
+        let offset_y = 10;
+
+        PatBlt(device_context, 0, 0, window_width, offset_y, BLACKNESS);
+        PatBlt(
+            device_context,
+            0,
+            offset_y + buffer.height,
+            window_width,
+            window_height,
+            BLACKNESS,
+        );
+        PatBlt(device_context, 0, 0, offset_x, window_height, BLACKNESS);
+        PatBlt(
+            device_context,
+            offset_x + buffer.width,
+            0,
+            window_width,
+            window_height,
+            BLACKNESS,
+        );
+
         //TODO: Aspect ratio correction
         StretchDIBits(
             device_context,
-            0,
-            0,
+            offset_x,
+            offset_y,
             buffer.width,  //window_width,
             buffer.height, //window_height,
             0,
@@ -1072,7 +1086,7 @@ pub fn win32_main() -> Result<()> {
 
         let mut window_class = WNDCLASSW::default();
 
-        win32_resize_dib_section(addr_of_mut!(GLOBAL_BACK_BUFFER), 1280, 720);
+        win32_resize_dib_section(addr_of_mut!(GLOBAL_BACK_BUFFER), 960, 540);
         window_class.style = CS_HREDRAW | CS_VREDRAW;
         window_class.lpfnWndProc = Some(win32_main_window_callback);
         window_class.hInstance = GetModuleHandleW(PCWSTR::null()).unwrap().into();
@@ -1105,7 +1119,7 @@ pub fn win32_main() -> Result<()> {
                 }
 
                 // TODO: If game_update_hz is too big, sound starts bugging. Ideally It should be monitor_refresh_hz / 2
-                let game_update_hz: f32 = monitor_refresh_hz as f32 / 4.0;
+                let game_update_hz: f32 = monitor_refresh_hz as f32 / 2.0;
                 let target_seconds_per_frame: f32 = 1.0 / game_update_hz;
 
                 let mut sound_output = Win32SoundOutput::default();
@@ -1178,6 +1192,18 @@ pub fn win32_main() -> Result<()> {
                     .add(game_memory.permanent_storage_size as usize)
                     .cast();
 
+                for replay_index in 0..win32_state.replay_buffers.len() {
+                    let replay_buffer = &mut win32_state.replay_buffers[replay_index];
+                    replay_buffer.memory_block = VirtualAlloc(
+                        None,
+                        win32_state.total_size as usize,
+                        MEM_RESERVE | MEM_COMMIT,
+                        PAGE_READWRITE,
+                    );
+
+                    debug_assert!(!replay_buffer.memory_block.is_null());
+                }
+
                 if !samples.is_null()
                     && !game_memory.permanent_storage.is_null()
                     && !game_memory.transient_storage.is_null()
@@ -1203,6 +1229,8 @@ pub fn win32_main() -> Result<()> {
                     );
 
                     while GLOBAL_RUNNING {
+                        new_input.dt_for_frame = target_seconds_per_frame;
+
                         let new_dll_write_time =
                             win32_get_last_write_time(source_game_code_dll_full_path);
                         if CompareFileTime(&new_dll_write_time, &game.dll_last_write_time) != 0 {
@@ -1226,6 +1254,39 @@ pub fn win32_main() -> Result<()> {
                         win32_process_pending_messages(&mut win32_state, new_keyboard_controller);
 
                         if !GLOBAL_PAUSE {
+                            // MOUSE INPUT
+                            let mouse_p = ptr::from_mut(&mut POINT::default());
+                            if let Err(e) = GetCursorPos(mouse_p) {
+                                dbg!(e);
+                            };
+                            ScreenToClient(window, mouse_p);
+                            new_input.mouse_x = (*mouse_p).x;
+                            new_input.mouse_y = (*mouse_p).y;
+                            new_input.mouse_z = 0;
+
+                            win32_process_keyboard_message(
+                                &mut new_input.mouse_buttons[0],
+                                (GetKeyState(VK_LBUTTON.0.into()) & (1 << 15)) != 0,
+                            );
+                            win32_process_keyboard_message(
+                                &mut new_input.mouse_buttons[1],
+                                (GetKeyState(VK_RBUTTON.0.into()) & (1 << 15)) != 0,
+                            );
+                            win32_process_keyboard_message(
+                                &mut new_input.mouse_buttons[2],
+                                (GetKeyState(VK_MBUTTON.0.into()) & (1 << 15)) != 0,
+                            );
+                            win32_process_keyboard_message(
+                                &mut new_input.mouse_buttons[3],
+                                (GetKeyState(VK_XBUTTON1.0.into()) & (1 << 15)) != 0,
+                            );
+                            win32_process_keyboard_message(
+                                &mut new_input.mouse_buttons[4],
+                                (GetKeyState(VK_XBUTTON2.0.into()) & (1 << 15)) != 0,
+                            );
+                            // new_input.mouse_buttons[0] =
+                            // new_input.mouse_buttons[1] =
+                            // new_input.mouse_buttons[2] =
                             //CONTROLLER INPUT
                             //Should we poll this more frequently?
                             let mut max_controller_count = XUSER_MAX_COUNT;
@@ -1427,8 +1488,15 @@ pub fn win32_main() -> Result<()> {
                                 win32_playback_input(&mut win32_state, new_input);
                             }
 
+                            let thread = ThreadContext::default();
+
                             if let Some(game_update_and_render) = game.update_and_render {
-                                game_update_and_render(&buffer, new_input, &mut game_memory);
+                                game_update_and_render(
+                                    &thread,
+                                    &buffer,
+                                    new_input,
+                                    &mut game_memory,
+                                );
                             }
 
                             let audio_wall_clock = win32_get_wall_clock();
@@ -1510,7 +1578,11 @@ pub fn win32_main() -> Result<()> {
                                     };
 
                                     if let Some(game_get_sound_samples) = game.get_sound_samples {
-                                        game_get_sound_samples(&mut game_memory, &sound_buffer);
+                                        game_get_sound_samples(
+                                            &thread,
+                                            &mut game_memory,
+                                            &sound_buffer,
+                                        );
                                     }
 
                                     #[cfg(feature = "gaming_internal")]
@@ -1605,15 +1677,14 @@ pub fn win32_main() -> Result<()> {
                                 });
 
                             #[cfg(feature = "gaming_internal")]
-                            win32_debug_sync_display(
-                                GLOBAL_BACK_BUFFER.can_into(),
-                                debug_time_markers.len(),
-                                debug_time_markers.as_ref(),
-                                debug_time_marker_index as i32 - 1,
-                                &sound_output,
-                                target_seconds_per_frame,
-                            );
-
+                            // win32_debug_sync_display(
+                            //     GLOBAL_BACK_BUFFER.can_into(),
+                            //     debug_time_markers.len(),
+                            //     debug_time_markers.as_ref(),
+                            //     debug_time_marker_index as i32 - 1,
+                            //     &sound_output,
+                            //     target_seconds_per_frame,
+                            // );
                             let device_context = GetDC(window);
 
                             win32_display_buffer_in_window(
@@ -1662,11 +1733,11 @@ pub fn win32_main() -> Result<()> {
                             let megac_per_frame = cycles_elapsed / (1000 * 1000);
 
                             let timer_output = format!(
-                                "{}ms/f, {}f/s, {}mc/f",
+                                "{:.02}ms/f, {}f/s, {}mc/f \n",
                                 ms_per_frame, fps, megac_per_frame
                             );
                             // let debug_sound_output = format!("PC:{play_cursor} BTL:{byte_to_lock} TC:{target_cursor} BTW:{bytes_to_write}");
-                            // dbg!(timer_output);
+                            // OutputDebugStringW(&HSTRING::from(timer_output));
                             // dbg!(debug_sound_output);
                             #[cfg(feature = "gaming_internal")]
                             {
@@ -1682,8 +1753,6 @@ pub fn win32_main() -> Result<()> {
                     dbg!(samples);
                     dbg!(game_memory.permanent_storage);
                 }
-
-                // ReleaseDC(window, device_context);
             } else {
                 //Logging
                 dbg!(window);
@@ -1749,45 +1818,44 @@ fn win32_record_input(win32_state: &Win32State, new_input: &mut GameInput) {
     }
 }
 
-fn win32_begin_recording_input(state: &mut Win32State, input_recording_index: u32) -> Result<()> {
-    state.input_recording_index = input_recording_index;
-    unsafe {
-        let mut file_name = PathBuf::new();
-        win32_get_input_file_location(state, input_recording_index, &mut file_name);
+fn win32_begin_recording_input(state: &mut Win32State, input_recording_index: usize) -> Result<()> {
+    debug_assert!(input_recording_index < state.replay_buffers.len());
+    let mut replay_buffer = Win32ReplayBuffer::default();
+    win32_get_replay_buffer(state, input_recording_index, &mut replay_buffer);
 
-        state.recording_handle = CreateFileW(
-            &HSTRING::from(file_name.as_os_str()),
-            GENERIC_WRITE.0,
-            FILE_SHARE_NONE,
-            None,
-            CREATE_ALWAYS,
-            FILE_FLAGS_AND_ATTRIBUTES(0),
-            HANDLE(0),
-        )?;
+    if !replay_buffer.memory_block.is_null() {
+        state.input_recording_index = input_recording_index;
 
-        let bytes_to_write = state.total_size as u32;
+        unsafe {
+            let mut file_name = PathBuf::new();
+            win32_get_input_file_location(state, input_recording_index, &mut file_name);
 
-        debug_assert!(state.total_size == bytes_to_write as u64);
+            state.recording_handle = CreateFileW(
+                &HSTRING::from(file_name.as_os_str()),
+                GENERIC_WRITE.0,
+                FILE_SHARE_NONE,
+                None,
+                CREATE_ALWAYS,
+                FILE_FLAGS_AND_ATTRIBUTES(0),
+                HANDLE(0),
+            )?;
 
-        let mut bytes_written: u32 = 0;
-        let write_buffer =
-            state.game_memory_block as *mut game::gaming_engine::GameMemory as *mut u8;
-        match WriteFile(
-            state.recording_handle,
-            Some(std::slice::from_raw_parts_mut(
-                write_buffer,
-                bytes_to_write as usize,
-            )),
-            Some(&mut bytes_written),
-            None,
-        ) {
-            Ok(()) => {
-                debug_assert!(bytes_written == state.total_size as u32);
-                // File is read successfully, dont know if something should happen here
-            }
-            Err(e) => {
+            let bytes_to_write = state.total_size as u32;
+
+            debug_assert!(state.total_size == bytes_to_write as u64);
+
+            let file_position: i64 = state.total_size.try_into().unwrap();
+            if let Err(e) =
+                SetFilePointerEx(state.recording_handle, file_position, None, FILE_BEGIN)
+            {
                 dbg!(e);
             }
+
+            ptr::copy_nonoverlapping(
+                state.game_memory_block,
+                replay_buffer.memory_block,
+                state.total_size.try_into().unwrap(),
+            );
         }
     }
 
@@ -1796,51 +1864,42 @@ fn win32_begin_recording_input(state: &mut Win32State, input_recording_index: u3
 
 fn win32_end_recording_input(win32_state: &mut Win32State) -> Result<()> {
     unsafe { CloseHandle(win32_state.recording_handle)? }
-
     win32_state.input_recording_index = 0;
 
     Ok(())
 }
 
-fn win32_begin_input_playback(state: &mut Win32State, input_playing_index: u32) -> Result<()> {
-    state.input_playing_index = input_playing_index;
-    unsafe {
-        let mut file_name = PathBuf::new();
-        win32_get_input_file_location(state, input_playing_index, &mut file_name);
+fn win32_begin_input_playback(state: &mut Win32State, input_playing_index: usize) -> Result<()> {
+    let mut replay_buffer = Win32ReplayBuffer::default();
+    win32_get_replay_buffer(state, input_playing_index, &mut replay_buffer);
 
-        state.playback_handle = CreateFileW(
-            &HSTRING::from(file_name.as_os_str()),
-            GENERIC_READ.0,
-            FILE_SHARE_READ,
-            None,
-            OPEN_EXISTING,
-            FILE_FLAGS_AND_ATTRIBUTES(0),
-            HANDLE(0),
-        )?;
+    if !replay_buffer.memory_block.is_null() {
+        state.input_playing_index = input_playing_index;
+        unsafe {
+            let mut file_name = PathBuf::new();
+            win32_get_input_file_location(state, input_playing_index, &mut file_name);
 
-        // Downcast size because we dont want to read beyond 32 bit
-        let bytes_to_read = state.total_size as u32;
+            state.playback_handle = CreateFileW(
+                &HSTRING::from(file_name.as_os_str()),
+                GENERIC_READ.0,
+                FILE_SHARE_READ,
+                None,
+                OPEN_EXISTING,
+                FILE_FLAGS_AND_ATTRIBUTES(0),
+                HANDLE(0),
+            )?;
 
-        //Upcast bytes_to_read because we cant compare otherwise
-        debug_assert!(state.total_size == bytes_to_read as u64);
-
-        let mut bytes_read: u32 = 0;
-
-        let read_buffer =
-            state.game_memory_block as *mut game::gaming_engine::GameMemory as *mut u8;
-        match ReadFile(
-            state.playback_handle,
-            Some(std::slice::from_raw_parts_mut(
-                read_buffer,
-                bytes_to_read as usize,
-            )),
-            Some(&mut bytes_read),
-            None,
-        ) {
-            Ok(()) => {}
-            Err(e) => {
+            let file_position: i64 = state.total_size.try_into().unwrap();
+            if let Err(e) = SetFilePointerEx(state.playback_handle, file_position, None, FILE_BEGIN)
+            {
                 dbg!(e);
             }
+
+            ptr::copy_nonoverlapping(
+                replay_buffer.memory_block,
+                state.game_memory_block,
+                state.total_size.try_into().unwrap(),
+            );
         }
     }
 
@@ -1849,7 +1908,6 @@ fn win32_begin_input_playback(state: &mut Win32State, input_playing_index: u32) 
 
 fn win32_end_input_playback(win32_state: &mut Win32State) -> Result<()> {
     unsafe { CloseHandle(win32_state.playback_handle)? }
-
     win32_state.input_playing_index = 0;
 
     Ok(())
@@ -1867,7 +1925,19 @@ fn win32_build_exe_path_file_name(state: &Win32State, file_name: String, dest: &
     dest.push(path);
 }
 
-fn win32_get_input_file_location(state: &Win32State, slot_index: u32, dest: &mut PathBuf) {
+fn win32_get_input_file_location(state: &Win32State, slot_index: usize, dest: &mut PathBuf) {
     debug_assert!(slot_index == 1);
     win32_build_exe_path_file_name(state, "loop_playback.pb".to_string(), dest);
+}
+
+fn win32_get_replay_buffer(
+    state: &Win32State,
+    index: usize,
+    replay_buffer: &mut Win32ReplayBuffer,
+) {
+    debug_assert!(index < state.replay_buffers.len());
+
+    let buffer = &state.replay_buffers[index];
+    replay_buffer.memory_block = buffer.memory_block;
+    replay_buffer.replay_file_name = buffer.replay_file_name.clone();
 }
