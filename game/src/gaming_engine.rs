@@ -1,17 +1,18 @@
 use std::{
-    default, io,
+    io,
     mem::{size_of, transmute},
-    ops::{AddAssign, Deref, MulAssign, SubAssign},
     path::PathBuf,
-    ptr::{self, null_mut},
-    vec,
+    ptr::null_mut,
 };
 
 use std::ffi::c_void;
 
-use crate::tile::{
-    get_tile_value, is_tile_map_point_empty, recanonicalize_position, TileChunk, TileMap,
-    TileMapPosition,
+use crate::{
+    macros::*,
+    tile::{
+        get_tile_value, is_tile_map_point_empty, recanonicalize_position, set_tile_value,
+        TileChunk, TileMap, TileMapPosition,
+    },
 };
 
 pub type GameGetSoundSamples =
@@ -159,19 +160,28 @@ impl Default for ThreadContext {
 }
 
 pub struct GameState {
+    world_arena: MemoryArena,
+    world: *mut World,
+
     pub player_p: TileMapPosition,
 }
 
 pub struct World {
-    pub tile_map: TileMap,
+    pub tile_map: *mut TileMap,
 }
 
 impl Default for World {
     fn default() -> Self {
         Self {
-            tile_map: TileMap::default(),
+            tile_map: null_mut(),
         }
     }
+}
+
+pub struct MemoryArena {
+    size: usize,
+    base: *mut u8,
+    used: usize,
 }
 
 #[inline]
@@ -306,60 +316,99 @@ pub fn game_update_and_render(
     debug_assert!(size_of::<GameState>() <= memory.permanent_storage_size.try_into().unwrap());
 
     unsafe {
-        const TILE_MAP_COUNT_X: usize = 256;
-        const TILE_MAP_COUNT_Y: usize = 256;
-
-        let mut temp_tiles = vec![vec![0; 256]; 256];
-
-        temp_tiles[0][0] = 1;
-        temp_tiles[0][1] = 1;
-        temp_tiles[0][2] = 1;
-        temp_tiles[0][3] = 1;
-        temp_tiles[0][4] = 1;
-        temp_tiles[0][5] = 1;
-
-        temp_tiles[0][0] = 1;
-        temp_tiles[1][0] = 1;
-        temp_tiles[2][0] = 1;
-        temp_tiles[3][0] = 1;
-        temp_tiles[4][0] = 1;
-        temp_tiles[5][0] = 1;
-
-        let mut tile_map = TileMap::default();
-
-        tile_map.chunk_shift = 8;
-        tile_map.chunk_mask = (1 << tile_map.chunk_shift) - 1;
-        tile_map.chunk_dim = 256;
-
-        tile_map.tile_chunk_count_x = 1;
-        tile_map.tile_chunk_count_y = 1;
-
-        let tile_chunk = ptr::from_mut(&mut TileChunk::default());
-        (*tile_chunk).tiles = temp_tiles;
-        tile_map.tile_chunks = tile_chunk;
-
-        tile_map.tile_side_in_meters = 1.5;
-        tile_map.tile_side_in_pixels = 60;
-
-        let lower_left_x = -(tile_map.tile_side_in_pixels / 2) as f32;
-        let lower_left_y = buffer.height as f32;
-
-        tile_map.meters_to_pixels =
-            tile_map.tile_side_in_pixels as f32 / tile_map.tile_side_in_meters;
-
         let player_height = 1.5;
         let player_width = player_height * 0.75;
 
-        let game_state = transmute::<*mut c_void, &mut GameState>(memory.permanent_storage);
+        let game_state = memory
+            .permanent_storage
+            .cast::<GameState>()
+            .as_mut()
+            .unwrap();
 
         if !memory.is_initialized {
-            memory.is_initialized = true;
-
             game_state.player_p.abs_tile_x = 5;
             game_state.player_p.abs_tile_y = 5;
             game_state.player_p.tile_rel_x = 5.0;
             game_state.player_p.tile_rel_y = 5.0;
+            initialize_arena(
+                &mut game_state.world_arena,
+                memory.permanent_storage_size as usize - size_of::<GameState>(),
+                memory
+                    .permanent_storage
+                    .add(size_of::<GameState>())
+                    .cast::<u8>(),
+            );
+
+            game_state.world = push_size!(&mut game_state.world_arena, World);
+            let world = game_state.world.as_mut().unwrap();
+            world.tile_map = push_size!(&mut game_state.world_arena, TileMap);
+            let tile_map = world.tile_map.as_mut().unwrap();
+
+            tile_map.chunk_shift = 8;
+            tile_map.chunk_mask = (1 << tile_map.chunk_shift) - 1;
+            tile_map.chunk_dim = 1 << tile_map.chunk_shift;
+
+            tile_map.tile_chunk_count_x = 4;
+            tile_map.tile_chunk_count_y = 4;
+
+            tile_map.tile_chunks = push_array!(
+                &mut game_state.world_arena,
+                tile_map.tile_chunk_count_x * tile_map.tile_chunk_count_y,
+                TileChunk
+            );
+
+            for y in 0..tile_map.tile_chunk_count_y {
+                for x in 0..tile_map.tile_chunk_count_x {
+                    (*tile_map
+                        .tile_chunks
+                        .add((y * tile_map.tile_chunk_count_x + x) as usize))
+                    .tiles = push_array!(
+                        &mut game_state.world_arena,
+                        tile_map.chunk_dim * tile_map.chunk_dim,
+                        u32
+                    )
+                }
+            }
+
+            tile_map.tile_side_in_meters = 1.5;
+            tile_map.tile_side_in_pixels = 60;
+
+            tile_map.meters_to_pixels =
+                tile_map.tile_side_in_pixels as f32 / tile_map.tile_side_in_meters;
+
+            let lower_left_x = -(tile_map.tile_side_in_pixels / 2) as f32;
+            let lower_left_y = buffer.height as f32;
+
+            let tiles_per_width: u32 = 17;
+            let tiles_per_height: u32 = 9;
+            for screen_y in 0..32 {
+                for screen_x in 0..32 {
+                    for tile_y in 0..tiles_per_height {
+                        for tile_x in 0..tiles_per_width {
+                            let abs_tile_x = screen_x * tiles_per_width + tile_x;
+                            let abs_tile_y = screen_y * tiles_per_height + tile_y;
+
+                            set_tile_value(
+                                &mut game_state.world_arena,
+                                world.tile_map.as_ref().unwrap(),
+                                abs_tile_x,
+                                abs_tile_y,
+                                if (tile_x == tile_y) && (tile_y % 2) == 0 {
+                                    1
+                                } else {
+                                    0
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+
+            memory.is_initialized = true;
         }
+
+        let world = game_state.world;
+        let tile_map = (*world).tile_map.as_ref().unwrap();
 
         for controller_index in 0..input.controllers.len() {
             let controller = get_controller(input, controller_index);
@@ -403,25 +452,21 @@ pub fn game_update_and_render(
                     player_speed = 20.0;
                 }
 
-                d_player_x.mul_assign(player_speed);
-                d_player_y.mul_assign(player_speed);
+                d_player_x *= player_speed;
+                d_player_y *= player_speed;
 
                 let mut new_player_p = game_state.player_p;
-                new_player_p
-                    .tile_rel_x
-                    .add_assign(d_player_x * input.dt_for_frame);
-                new_player_p
-                    .tile_rel_y
-                    .add_assign(d_player_y * input.dt_for_frame);
+                new_player_p.tile_rel_x += d_player_x * input.dt_for_frame;
+                new_player_p.tile_rel_y += d_player_y * input.dt_for_frame;
 
                 new_player_p = recanonicalize_position(&tile_map, new_player_p);
 
                 let mut player_left = new_player_p;
-                player_left.tile_rel_x.sub_assign(player_width * 0.5);
+                player_left.tile_rel_x -= player_width * 0.5;
                 player_left = recanonicalize_position(&tile_map, player_left);
 
                 let mut player_right = new_player_p;
-                player_right.tile_rel_x.add_assign(player_width * 0.5);
+                player_right.tile_rel_x += player_width * 0.5;
                 player_right = recanonicalize_position(&tile_map, player_right);
 
                 if is_tile_map_point_empty(&tile_map, new_player_p)
@@ -455,7 +500,7 @@ pub fn game_update_and_render(
                     .wrapping_add_signed(rel_column);
                 let row: u32 = game_state.player_p.abs_tile_y.wrapping_add_signed(rel_row);
 
-                let tile_idx: u32 = get_tile_value(&tile_map, column, row);
+                let tile_idx: u32 = get_tile_value(tile_map, column, row);
                 let mut gray: f32 = 0.5;
                 if tile_idx == 1 {
                     gray = 1.0;
@@ -467,32 +512,46 @@ pub fn game_update_and_render(
                 }
 
                 let cen_x: f32 = screen_center_x
-                    - tile_map.meters_to_pixels * game_state.player_p.tile_rel_x
-                    + rel_column as f32 * tile_map.tile_side_in_pixels as f32;
+                    - (*tile_map).meters_to_pixels * game_state.player_p.tile_rel_x
+                    + rel_column as f32 * (*tile_map).tile_side_in_pixels as f32;
                 let cen_y: f32 = screen_center_y
-                    + tile_map.meters_to_pixels * game_state.player_p.tile_rel_y
-                    - (rel_row as f32 * tile_map.tile_side_in_pixels as f32);
-                let min_x: f32 = cen_x - 0.5 * tile_map.tile_side_in_pixels as f32;
-                let min_y: f32 = cen_y - 0.5 * tile_map.tile_side_in_pixels as f32;
-                let max_x: f32 = cen_x + 0.5 * tile_map.tile_side_in_pixels as f32;
-                let max_y: f32 = cen_y + 0.5 * tile_map.tile_side_in_pixels as f32;
+                    + (*tile_map).meters_to_pixels * game_state.player_p.tile_rel_y
+                    - (rel_row as f32 * (*tile_map).tile_side_in_pixels as f32);
+                let min_x: f32 = cen_x - 0.5 * (*tile_map).tile_side_in_pixels as f32;
+                let min_y: f32 = cen_y - 0.5 * (*tile_map).tile_side_in_pixels as f32;
+                let max_x: f32 = cen_x + 0.5 * (*tile_map).tile_side_in_pixels as f32;
+                let max_y: f32 = cen_y + 0.5 * (*tile_map).tile_side_in_pixels as f32;
 
                 draw_rectangle(buffer, min_x, min_y, max_x, max_y, gray, gray, gray)
             }
         }
 
-        let player_left = screen_center_x - 0.5 * player_width * tile_map.meters_to_pixels;
-        let player_top = screen_center_y - player_height * tile_map.meters_to_pixels;
+        let player_left = screen_center_x - 0.5 * player_width * (*tile_map).meters_to_pixels;
+        let player_top = screen_center_y - player_height * (*tile_map).meters_to_pixels;
 
         draw_rectangle(
             buffer,
             player_left,
             player_top,
-            player_left + tile_map.meters_to_pixels * player_width,
-            player_top + tile_map.meters_to_pixels * player_height,
+            player_left + (*tile_map).meters_to_pixels * player_width,
+            player_top + (*tile_map).meters_to_pixels * player_height,
             1.0,
             0.0,
             0.0,
         )
     }
+}
+
+fn push_size_(arena: &mut MemoryArena, size: usize) -> *mut c_void {
+    debug_assert!((arena.used + size) <= arena.size);
+    let result = unsafe { arena.base.add(arena.used) };
+    arena.used += size;
+
+    result as *mut c_void
+}
+
+fn initialize_arena(arena: &mut MemoryArena, size: usize, base: *mut u8) {
+    arena.size = size;
+    arena.base = base;
+    arena.used = 0;
 }
