@@ -1,15 +1,15 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 use crate::macros::*;
-use game::gaming_engine::*;
+use game::game::*;
 use std::{
     arch::x86_64::_rdtsc,
-    array,
     env::current_exe,
     ffi::c_void,
     io,
     mem::{size_of, transmute},
     path::PathBuf,
     ptr::{self, addr_of_mut, null_mut, swap},
+    slice,
 };
 use windows::{
     core::*,
@@ -1086,6 +1086,7 @@ pub fn win32_main() -> Result<()> {
 
         let mut window_class = WNDCLASSW::default();
 
+        // 1080p is 1920x1080. Half is 960x540 (Because we are software rendering for now)
         win32_resize_dib_section(addr_of_mut!(GLOBAL_BACK_BUFFER), 960, 540);
         window_class.style = CS_HREDRAW | CS_VREDRAW;
         window_class.lpfnWndProc = Some(win32_main_window_callback);
@@ -1259,6 +1260,7 @@ pub fn win32_main() -> Result<()> {
                             if let Err(e) = GetCursorPos(mouse_p) {
                                 dbg!(e);
                             };
+
                             ScreenToClient(window, mouse_p);
                             new_input.mouse_x = (*mouse_p).x;
                             new_input.mouse_y = (*mouse_p).y;
@@ -1765,12 +1767,16 @@ pub fn win32_main() -> Result<()> {
 
 fn win32_playback_input(win32_state: &mut Win32State, new_input: &mut GameInput) {
     let mut bytes_read: u32 = 0;
-    let memory_size = size_of::<GameInput>();
+    let memory_size: usize = size_of::<GameInput>();
     unsafe {
-        let read_buffer = new_input as *mut game::gaming_engine::GameInput as *mut u8;
+        let read_buffer = slice::from_raw_parts_mut(
+            new_input as *mut game::game::GameInput as *mut u8,
+            memory_size,
+        );
+
         match ReadFile(
             win32_state.playback_handle,
-            Some(std::slice::from_raw_parts_mut(read_buffer, memory_size)),
+            Some(read_buffer),
             Some(&mut bytes_read),
             None,
         ) {
@@ -1781,7 +1787,7 @@ fn win32_playback_input(win32_state: &mut Win32State, new_input: &mut GameInput)
                     win32_begin_input_playback(win32_state, playing_index).unwrap();
                     if let Err(e) = ReadFile(
                         win32_state.playback_handle,
-                        Some(std::slice::from_raw_parts_mut(read_buffer, memory_size)),
+                        Some(read_buffer),
                         Some(&mut bytes_read),
                         None,
                     ) {
@@ -1800,7 +1806,7 @@ fn win32_record_input(win32_state: &Win32State, new_input: &mut GameInput) {
     let mut bytes_written: u32 = 0;
     let memory_size = size_of::<GameInput>();
     unsafe {
-        let write_buffer = new_input as *mut game::gaming_engine::GameInput as *mut u8;
+        let write_buffer = new_input as *mut game::game::GameInput as *mut u8;
         match WriteFile(
             win32_state.recording_handle,
             Some(std::slice::from_raw_parts_mut(write_buffer, memory_size)),
