@@ -1,5 +1,6 @@
 use std::{
     default,
+    fmt::Result,
     fs::File,
     io::{self, Read},
     mem::{size_of, transmute},
@@ -180,6 +181,7 @@ pub struct GameState {
     pub player_p: TileMapPosition,
     backdrop: LoadedBitmap,
     player: LoadedBitmap,
+    player_cape: LoadedBitmap,
 }
 
 pub struct World {
@@ -307,61 +309,56 @@ fn debug_load_bmp(
     thread: &ThreadContext,
     read_entire_file: &DebugPlatformReadEntireFile,
     file_name: PathBuf,
-) -> LoadedBitmap {
+) -> io::Result<LoadedBitmap> {
     let mut result = LoadedBitmap::default();
 
-    match read_entire_file(thread, file_name) {
-        Ok(read_result) => {
-            let header = unsafe { *read_result.contents.cast::<BitmapHeader>() };
-            let contents = read_result.contents as *mut u32;
+    let read_result = read_entire_file(thread, file_name)?;
 
-            let pixels = unsafe { contents.byte_add(header.bitmap_offset as usize) };
+    let header = unsafe { *read_result.contents.cast::<BitmapHeader>() };
+    let contents = read_result.contents as *mut u32;
 
-            result.pixels = pixels;
-            result.width = header.width;
-            result.height = header.height;
+    let pixels = unsafe { contents.byte_add(header.bitmap_offset as usize) };
 
-            debug_assert!(header.compression == 3);
+    result.pixels = pixels;
+    result.width = header.width;
+    result.height = header.height;
 
-            let red_mask = header.red_mask;
-            let green_mask = header.green_mask;
-            let blue_mask = header.blue_mask;
-            let alpha_mask = !(red_mask | green_mask | blue_mask);
+    debug_assert!(header.compression == 3);
 
-            let red_shift = find_least_significant_set_bit(red_mask);
-            let green_shift = find_least_significant_set_bit(green_mask);
-            let blue_shift = find_least_significant_set_bit(blue_mask);
-            let alpha_shift = find_least_significant_set_bit(alpha_mask);
+    let red_mask = header.red_mask;
+    let green_mask = header.green_mask;
+    let blue_mask = header.blue_mask;
+    let alpha_mask = !(red_mask | green_mask | blue_mask);
 
-            debug_assert!(red_shift.is_some());
-            debug_assert!(green_shift.is_some());
-            debug_assert!(blue_shift.is_some());
-            debug_assert!(alpha_shift.is_some());
+    let red_shift = find_least_significant_set_bit(red_mask);
+    let green_shift = find_least_significant_set_bit(green_mask);
+    let blue_shift = find_least_significant_set_bit(blue_mask);
+    let alpha_shift = find_least_significant_set_bit(alpha_mask);
 
-            let mut source_dest = pixels;
+    debug_assert!(red_shift.is_some());
+    debug_assert!(green_shift.is_some());
+    debug_assert!(blue_shift.is_some());
+    debug_assert!(alpha_shift.is_some());
 
-            for y in 0..header.height {
-                for x in 0..header.width {
-                    let c = unsafe { source_dest.read_unaligned() };
-                    unsafe {
-                        source_dest.write_unaligned(
-                            (((c >> alpha_shift.unwrap()) & 0xFF) << 24)
-                                | (((c >> red_shift.unwrap()) & 0xFF) << 16)
-                                | (((c >> green_shift.unwrap()) & 0xFF) << 8)
-                                | (((c >> blue_shift.unwrap()) & 0xFF) << 0),
-                        );
-                        source_dest = source_dest.add(1);
-                    }
-                }
+    let mut source_dest = pixels;
+
+    for y in 0..header.height {
+        for x in 0..header.width {
+            let c = unsafe { source_dest.read_unaligned() };
+            unsafe {
+                source_dest.write_unaligned(
+                    (((c >> alpha_shift.unwrap()) & 0xFF) << 24)
+                        | (((c >> red_shift.unwrap()) & 0xFF) << 16)
+                        | (((c >> green_shift.unwrap()) & 0xFF) << 8)
+                        | (((c >> blue_shift.unwrap()) & 0xFF) << 0),
+                );
+                source_dest = source_dest.add(1);
             }
         }
-        Err(e) => {
-            dbg!(e);
-        }
-    };
+    }
 
     //Byte order in memory is BB GG RR AA, bottom up
-    result
+    Ok(result)
 }
 
 #[no_mangle]
@@ -432,12 +429,20 @@ pub fn game_update_and_render(
                 thread,
                 &memory.debug_platform_read_entire_file,
                 Path::new("game/test/test.bmp").to_path_buf(),
-            );
+            )
+            .unwrap();
             game_state.player = debug_load_bmp(
                 thread,
                 &memory.debug_platform_read_entire_file,
                 Path::new("game/test/player.bmp").to_path_buf(),
-            );
+            )
+            .unwrap();
+            game_state.player_cape = debug_load_bmp(
+                thread,
+                &memory.debug_platform_read_entire_file,
+                Path::new("game/test/player_cape_front.bmp").to_path_buf(),
+            )
+            .unwrap();
 
             game_state.player_p.abs_tile_x = 3;
             game_state.player_p.abs_tile_y = 3;
@@ -754,7 +759,8 @@ pub fn game_update_and_render(
         //     0.0,
         // );
 
-        draw_bitmap(buffer, &game_state.player, player_left, player_top);
+        draw_bitmap(buffer, &game_state.player_cape, player_left, player_top);
+        //draw_bitmap(buffer, &game_state.player, player_left, player_top);
     }
 }
 
