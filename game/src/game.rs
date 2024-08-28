@@ -7,7 +7,7 @@ use std::{
 
 use std::ffi::c_void;
 
-use crate::{intrinsics::find_least_significant_set_bit, macros::*, random, tile::*};
+use crate::{intrinsics::find_least_significant_set_bit, macros::*, math::Vec2, random, tile::*};
 
 type MyResult<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -241,18 +241,16 @@ pub fn render_gradient(buffer: &GameOffscreenBuffer, blue_offset: i32, green_off
 
 pub fn draw_rectangle(
     buffer: &GameOffscreenBuffer,
-    min_x: f32,
-    min_y: f32,
-    max_x: f32,
-    max_y: f32,
+    v_min: Vec2,
+    v_max: Vec2,
     r: f32,
     g: f32,
     b: f32,
 ) {
-    let mut min_x: i32 = min_x.round() as i32;
-    let mut min_y: i32 = min_y.round() as i32;
-    let mut max_x: i32 = max_x.round() as i32;
-    let mut max_y: i32 = max_y.round() as i32;
+    let mut min_x: i32 = v_min.x.round() as i32;
+    let mut min_y: i32 = v_min.y.round() as i32;
+    let mut max_x: i32 = v_max.x.round() as i32;
+    let mut max_y: i32 = v_max.y.round() as i32;
 
     if min_x < 0 {
         min_x = 0;
@@ -468,13 +466,11 @@ pub fn game_update_and_render(
 
             game_state.player_p.abs_tile_x = 3;
             game_state.player_p.abs_tile_y = 3;
-            game_state.player_p.offset_x = 5.0;
-            game_state.player_p.offset_y = 5.0;
+            game_state.player_p.offset = Vec2::new(5.0, 5.0);
 
             game_state.camera_p.abs_tile_x = game_state.player_p.abs_tile_x;
             game_state.camera_p.abs_tile_y = game_state.player_p.abs_tile_y;
-            game_state.camera_p.offset_x = game_state.player_p.offset_x;
-            game_state.camera_p.offset_y = game_state.player_p.offset_y;
+            game_state.camera_p.offset = game_state.player_p.offset;
 
             initialize_arena(
                 &mut game_state.world_arena,
@@ -639,13 +635,12 @@ pub fn game_update_and_render(
 
             if controller.is_analog {
             } else {
-                let mut d_player_x = 0.0; // pixels/second
-                let mut d_player_y = 0.0; // pixels/second
+                let mut d_player = Vec2::default(); // pixels/second
 
                 //Fix facing directions when we have more bitmaps with facing directions
                 if controller.button_state.concrete_buttons.move_up.ended_down {
                     game_state.hero_facing_direction = 0;
-                    d_player_y = 1.0;
+                    d_player.y = 1.0;
                 }
                 if controller
                     .button_state
@@ -654,7 +649,7 @@ pub fn game_update_and_render(
                     .ended_down
                 {
                     game_state.hero_facing_direction = 0;
-                    d_player_y = -1.0;
+                    d_player.y = -1.0;
                 }
                 if controller
                     .button_state
@@ -663,7 +658,7 @@ pub fn game_update_and_render(
                     .ended_down
                 {
                     game_state.hero_facing_direction = 0;
-                    d_player_x = -1.0
+                    d_player.x = -1.0
                 }
                 if controller
                     .button_state
@@ -672,7 +667,7 @@ pub fn game_update_and_render(
                     .ended_down
                 {
                     game_state.hero_facing_direction = 1;
-                    d_player_x = 1.0;
+                    d_player.x = 1.0;
                 }
 
                 // Walking Speed
@@ -681,21 +676,23 @@ pub fn game_update_and_render(
                     player_speed = 50.0;
                 }
 
-                d_player_x *= player_speed;
-                d_player_y *= player_speed;
+                d_player *= player_speed;
+
+                if d_player.x != 0.0 && d_player.y != 0.0 {
+                    d_player *= 0.5f32.sqrt();
+                }
 
                 let mut new_player_p = game_state.player_p;
-                new_player_p.offset_x += d_player_x * input.dt_for_frame;
-                new_player_p.offset_y += d_player_y * input.dt_for_frame;
+                new_player_p.offset += d_player * input.dt_for_frame;
 
                 new_player_p = recanonicalize_position(&tile_map, new_player_p);
 
                 let mut player_left = new_player_p;
-                player_left.offset_x -= player_width * 0.5;
+                player_left.offset.x -= player_width * 0.5;
                 player_left = recanonicalize_position(&tile_map, player_left);
 
                 let mut player_right = new_player_p;
-                player_right.offset_x += player_width * 0.5;
+                player_right.offset.x += player_width * 0.5;
                 player_right = recanonicalize_position(&tile_map, player_right);
 
                 if is_tile_map_point_empty(&tile_map, new_player_p)
@@ -763,18 +760,20 @@ pub fn game_update_and_render(
                         gray = 0.0;
                     }
 
-                    let cen_x: f32 = screen_center_x
-                        - meters_to_pixels * game_state.camera_p.offset_x
-                        + rel_column as f32 * tile_side_in_pixels as f32;
-                    let cen_y: f32 = screen_center_y
-                        + meters_to_pixels * game_state.camera_p.offset_y
-                        - (rel_row as f32 * tile_side_in_pixels as f32);
-                    let min_x: f32 = cen_x - 0.5 * tile_side_in_pixels as f32;
-                    let min_y: f32 = cen_y - 0.5 * tile_side_in_pixels as f32;
-                    let max_x: f32 = cen_x + 0.5 * tile_side_in_pixels as f32;
-                    let max_y: f32 = cen_y + 0.5 * tile_side_in_pixels as f32;
+                    let tile_side = Vec2::new(
+                        0.5 * tile_side_in_pixels as f32,
+                        0.5 * tile_side_in_pixels as f32,
+                    );
+                    let cen = Vec2::new(
+                        screen_center_x - meters_to_pixels * game_state.camera_p.offset.x
+                            + rel_column as f32 * tile_side_in_pixels as f32,
+                        screen_center_y + meters_to_pixels * game_state.camera_p.offset.y
+                            - (rel_row as f32 * tile_side_in_pixels as f32),
+                    );
+                    let min = cen - tile_side;
+                    let max = cen + tile_side;
 
-                    draw_rectangle(buffer, min_x, min_y, max_x, max_y, gray, gray, gray)
+                    draw_rectangle(buffer, min, max, gray, gray, gray)
                 }
             }
         }
@@ -785,16 +784,18 @@ pub fn game_update_and_render(
         let player_ground_point_x = screen_center_x; // + meters_to_pixels * diff.;
         let player_ground_point_y = screen_center_y; // - meters_to_pixels * diff.dy;
 
-        let player_left = player_ground_point_x - 0.5 * player_width * meters_to_pixels;
-        let player_top = player_ground_point_y - player_height * meters_to_pixels;
+        let player_left_top = Vec2::new(
+            player_ground_point_x - 0.5 * player_width * meters_to_pixels,
+            player_ground_point_y - player_height * meters_to_pixels,
+        );
+
+        let player_width_height = Vec2::new(player_width, player_height);
 
         // Draw Player
         draw_rectangle(
             buffer,
-            player_left,
-            player_top,
-            player_left + meters_to_pixels * player_width,
-            player_top + meters_to_pixels * player_height,
+            player_left_top,
+            player_left_top + meters_to_pixels * player_width_height,
             1.0,
             0.0,
             0.0,

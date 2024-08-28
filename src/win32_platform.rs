@@ -432,8 +432,8 @@ fn toggle_fullscreen(window: HWND) {
     unsafe {
         let dw_style = GetWindowLongW(window, GWL_STYLE);
         if dw_style as u32 & WS_OVERLAPPEDWINDOW.0 != 0 {
-            let mi: &mut MONITORINFO = &mut mem::zeroed();
-            mi.cbSize = size_of::<MONITORINFO>() as u32;
+            let mi: &mut MONITORINFO = &mut MONITORINFO::default();
+            mi.cbSize = size_of_val(mi) as u32;
 
             if let Ok(()) = GetWindowPlacement(window, &mut GLOBAL_WINDOW_POSITION) {
                 if GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY), mi).0 != 0 {

@@ -3,6 +3,7 @@ use std::ptr::null_mut;
 use crate::{
     game::{push_size_, MemoryArena},
     macros::push_array,
+    math::Vec2,
 };
 
 pub struct TileMap {
@@ -38,8 +39,7 @@ impl Default for TileMap {
 
 #[derive(Default)]
 pub struct TileMapDifference {
-    pub dx: f32,
-    pub dy: f32,
+    pub dxy: Vec2,
     pub dz: f32,
 }
 
@@ -51,8 +51,7 @@ pub struct TileMapPosition {
     pub abs_tile_z: u32,
 
     // Offsets from tile center
-    pub offset_x: f32,
-    pub offset_y: f32,
+    pub offset: Vec2,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -208,8 +207,8 @@ fn recanonicalize_coord(tile_map: &TileMap, tile: &mut u32, tile_rel: &mut f32) 
 
 pub fn recanonicalize_position(tile_map: &TileMap, pos: TileMapPosition) -> TileMapPosition {
     let mut result = pos;
-    recanonicalize_coord(tile_map, &mut result.abs_tile_x, &mut result.offset_x);
-    recanonicalize_coord(tile_map, &mut result.abs_tile_y, &mut result.offset_y);
+    recanonicalize_coord(tile_map, &mut result.abs_tile_x, &mut result.offset.x);
+    recanonicalize_coord(tile_map, &mut result.abs_tile_y, &mut result.offset.y);
     result
 }
 
@@ -294,12 +293,13 @@ pub fn are_on_same_tile(a: &TileMapPosition, b: &TileMapPosition) -> bool {
 pub fn subtract(tile_map: &TileMap, a: &TileMapPosition, b: &TileMapPosition) -> TileMapDifference {
     let mut result = TileMapDifference::default();
 
-    let dtile_x: f32 = a.abs_tile_x as f32 - b.abs_tile_x as f32;
-    let dtile_y: f32 = a.abs_tile_y as f32 - b.abs_tile_y as f32;
+    let dtile_xy = Vec2::new(
+        a.abs_tile_x as f32 - b.abs_tile_x as f32,
+        a.abs_tile_y as f32 - b.abs_tile_y as f32,
+    );
     let dtile_z: f32 = a.abs_tile_z as f32 - b.abs_tile_z as f32;
 
-    result.dx = tile_map.tile_side_in_meters * dtile_x + (a.offset_x - b.offset_x);
-    result.dy = tile_map.tile_side_in_meters * dtile_y + (a.offset_y - b.offset_y);
+    result.dxy = tile_map.tile_side_in_meters * dtile_xy + (a.offset - b.offset);
     result.dz = tile_map.tile_side_in_meters * dtile_z;
 
     result
