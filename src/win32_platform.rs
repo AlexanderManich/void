@@ -6,7 +6,7 @@ use std::{
     env::current_exe,
     ffi::c_void,
     io,
-    mem::{size_of, transmute},
+    mem::{self, size_of, transmute},
     path::PathBuf,
     ptr::{self, addr_of_mut, null_mut, swap},
     slice,
@@ -22,16 +22,13 @@ use windows::{
             TIMERR_NOERROR,
         },
         Storage::FileSystem::*,
-        System::{
-            Diagnostics::Debug::OutputDebugStringW, LibraryLoader::*, Memory::*, Performance::*,
-            Threading::Sleep,
-        },
+        System::{LibraryLoader::*, Memory::*, Performance::*, Threading::Sleep},
         UI::{
             Input::{
                 KeyboardAndMouse::{
                     GetKeyState, VIRTUAL_KEY, VK_A, VK_D, VK_DOWN, VK_E, VK_ESCAPE, VK_F4, VK_L,
-                    VK_LBUTTON, VK_LEFT, VK_MBUTTON, VK_P, VK_Q, VK_RBUTTON, VK_RIGHT, VK_S,
-                    VK_SPACE, VK_UP, VK_W, VK_XBUTTON1, VK_XBUTTON2,
+                    VK_LBUTTON, VK_LEFT, VK_MBUTTON, VK_P, VK_Q, VK_RBUTTON, VK_RETURN, VK_RIGHT,
+                    VK_S, VK_SPACE, VK_UP, VK_W, VK_XBUTTON1, VK_XBUTTON2,
                 },
                 XboxController::*,
             },
@@ -96,6 +93,7 @@ static mut GLOBAL_PAUSE: bool = false;
 static mut PERF_COUNTER_FREQ: i64 = 0;
 static mut DIRECT_SOUND: Option<IDirectSound8> = None;
 static mut SECONDARY_BUFFER: Option<IDirectSoundBuffer> = None;
+static mut GLOBAL_WINDOW_POSITION: WINDOWPLACEMENT = unsafe { mem::zeroed() };
 static mut GLOBAL_BACK_BUFFER: Win32OffscreenBuffer = Win32OffscreenBuffer {
     width: 0,
     height: 0,
@@ -232,7 +230,7 @@ fn win32_get_last_write_time(file_name: &HSTRING) -> FILETIME {
 fn win32_load_game_code(source_dll_name: &HSTRING, temp_dll_name: &HSTRING) -> Win32GameCode {
     let mut result = Win32GameCode {
         game_code_dll: None,
-        dll_last_write_time: Default::default(),
+        dll_last_write_time: FILETIME::default(),
         get_sound_samples: None,
         update_and_render: None,
     };
@@ -430,6 +428,45 @@ fn win32_process_input_stick_value(value: i16, dead_zone_threshold: u16) -> f32 
     x
 }
 
+fn toggle_fullscreen(window: HWND) {
+    unsafe {
+        let dw_style = GetWindowLongW(window, GWL_STYLE);
+        if dw_style as u32 & WS_OVERLAPPEDWINDOW.0 != 0 {
+            let mi: &mut MONITORINFO = &mut mem::zeroed();
+            mi.cbSize = size_of::<MONITORINFO>() as u32;
+
+            if let Ok(()) = GetWindowPlacement(window, &mut GLOBAL_WINDOW_POSITION) {
+                if GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY), mi).0 != 0 {
+                    SetWindowLongW(window, GWL_STYLE, dw_style & !WS_OVERLAPPEDWINDOW.0 as i32);
+                    SetWindowPos(
+                        window,
+                        HWND_TOP,
+                        mi.rcMonitor.left,
+                        mi.rcMonitor.top,
+                        mi.rcMonitor.right - mi.rcMonitor.left,
+                        mi.rcMonitor.bottom - mi.rcMonitor.top,
+                        SWP_NOOWNERZORDER | SWP_FRAMECHANGED,
+                    )
+                    .unwrap();
+                }
+            }
+        } else {
+            SetWindowLongW(window, GWL_STYLE, dw_style | WS_OVERLAPPEDWINDOW.0 as i32);
+            SetWindowPlacement(window, &mut GLOBAL_WINDOW_POSITION).unwrap();
+            SetWindowPos(
+                window,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED,
+            )
+            .unwrap();
+        }
+    }
+}
+
 fn win32_process_pending_messages(
     win32_state: &mut Win32State,
     keyboard_controller: &mut GameControllerInput,
@@ -446,6 +483,7 @@ fn win32_process_pending_messages(
                     let vk_code = msg.wParam.0 as u16;
                     let was_down = (msg.lParam.0 & (1 << 30)) != 0;
                     let is_down = (msg.lParam.0 & (1 << 31)) == 0;
+                    let alt_key_was_down = (msg.lParam.0 & (1 << 29)) != 0;
 
                     //Check prevents repeat key presses when holding key
                     if was_down != is_down {
@@ -514,9 +552,13 @@ fn win32_process_pending_messages(
                                 is_down,
                             ),
                             VK_F4 => {
-                                let alt_key_was_down = (msg.lParam.0 & (1 << 29)) != 0;
                                 if alt_key_was_down {
                                     GLOBAL_RUNNING = false;
+                                }
+                            }
+                            VK_RETURN => {
+                                if is_down && alt_key_was_down {
+                                    toggle_fullscreen(msg.hwnd);
                                 }
                             }
                             VK_P => {
@@ -568,7 +610,7 @@ pub fn debug_platform_read_entire_file(
     file_name: PathBuf,
 ) -> io::Result<DebugReadFileResult> {
     unsafe {
-        let mut result: DebugReadFileResult = Default::default();
+        let mut result: DebugReadFileResult = DebugReadFileResult::default();
 
         let file_name = &HSTRING::from(file_name.as_os_str());
 
@@ -610,7 +652,7 @@ pub fn debug_platform_read_entire_file(
                     result.contents_size = file_size32;
                 }
                 Err(e) => {
-                    debug_platform_free_file_memory(&thread, result.contents);
+                    debug_platform_free_file_memory(thread, result.contents);
                     result.contents = std::ptr::null_mut();
                     dbg!(e);
                 }
@@ -945,7 +987,7 @@ pub fn win32_resize_dib_section(buffer: *mut Win32OffscreenBuffer, width: i32, h
             PAGE_READWRITE,
         );
 
-        // Pitch determies when a new row starts in the sequence of bytes in the bitmap.
+        // Pitch determines when a new row starts in the sequence of bytes in the bitmap.
         buffer.pitch = (width * buffer.bytes_per_pixel) as usize;
     }
 }
@@ -957,44 +999,62 @@ fn win32_display_buffer_in_window(
     window_height: i32,
 ) {
     unsafe {
-        let offset_x = 10;
-        let offset_y = 10;
+        if window_width >= buffer.width * 2 && window_height >= buffer.height * 2 {
+            StretchDIBits(
+                device_context,
+                0,
+                0,
+                2 * buffer.width,  //window_width,
+                2 * buffer.height, //window_height,
+                0,
+                0,
+                buffer.width,
+                buffer.height,
+                Some(buffer.memory as *const c_void),
+                &buffer.info,
+                DIB_RGB_COLORS,
+                SRCCOPY,
+            );
+        } else {
+            let offset_x = 10;
+            let offset_y = 10;
 
-        PatBlt(device_context, 0, 0, window_width, offset_y, BLACKNESS);
-        PatBlt(
-            device_context,
-            0,
-            offset_y + buffer.height,
-            window_width,
-            window_height,
-            BLACKNESS,
-        );
-        PatBlt(device_context, 0, 0, offset_x, window_height, BLACKNESS);
-        PatBlt(
-            device_context,
-            offset_x + buffer.width,
-            0,
-            window_width,
-            window_height,
-            BLACKNESS,
-        );
+            PatBlt(device_context, 0, 0, window_width, offset_y, BLACKNESS);
+            PatBlt(
+                device_context,
+                0,
+                offset_y + buffer.height,
+                window_width,
+                window_height,
+                BLACKNESS,
+            );
+            PatBlt(device_context, 0, 0, offset_x, window_height, BLACKNESS);
+            PatBlt(
+                device_context,
+                offset_x + buffer.width,
+                0,
+                window_width,
+                window_height,
+                BLACKNESS,
+            );
 
-        //TODO: Aspect ratio correction
-        StretchDIBits(
-            device_context,
-            offset_x,
-            offset_y,
-            buffer.width,  //window_width,
-            buffer.height, //window_height,
-            0,
-            0,
-            buffer.width,
-            buffer.height,
-            Some(buffer.memory as *const c_void),
-            &buffer.info,
-            DIB_RGB_COLORS,
-            SRCCOPY,
-        );
+            //TODO: Aspect ratio correction
+            StretchDIBits(
+                device_context,
+                offset_x,
+                offset_y,
+                buffer.width,  //window_width,
+                buffer.height, //window_height,
+                0,
+                0,
+                buffer.width,
+                buffer.height,
+                Some(buffer.memory as *const c_void),
+                &buffer.info,
+                DIB_RGB_COLORS,
+                SRCCOPY,
+            );
+        }
     }
 }
 
@@ -1072,7 +1132,7 @@ pub fn win32_main() -> Result<()> {
         win32_get_exe_file_name(&mut win32_state);
 
         let mut dll_dir_path = PathBuf::new();
-        win32_build_exe_path_file_name(&win32_state, "deps".to_string(), &mut dll_dir_path);
+        win32_build_exe_path_file_name(&win32_state, "deps", &mut dll_dir_path);
 
         let source_game_code_dll_full_path =
             &HSTRING::from(dll_dir_path.join("game.dll").as_os_str());
@@ -1091,6 +1151,7 @@ pub fn win32_main() -> Result<()> {
         window_class.style = CS_HREDRAW | CS_VREDRAW;
         window_class.lpfnWndProc = Some(win32_main_window_callback);
         window_class.hInstance = GetModuleHandleW(PCWSTR::null()).unwrap().into();
+        window_class.hCursor = LoadCursorW(None, IDC_ARROW).unwrap();
         // window_class.hIcon = ;
         window_class.lpszClassName = w!("GamingWindowClass");
 
@@ -1507,126 +1568,109 @@ pub fn win32_main() -> Result<()> {
 
                             let mut play_cursor = 0;
                             let mut write_cursor = 0;
-                            match SECONDARY_BUFFER
+
+                            if let Err(e) = SECONDARY_BUFFER
                                 .as_ref()
                                 .unwrap()
                                 .GetCurrentPosition(Some(&mut play_cursor), Some(&mut write_cursor))
                             {
-                                Ok(_) => {
-                                    if !sound_is_valid {
-                                        sound_output.running_sample_index =
-                                            write_cursor / sound_output.bytes_per_sample;
-                                        sound_is_valid = true;
-                                    }
+                                sound_is_valid = false;
+                                dbg!(e);
+                            }
 
-                                    let byte_to_lock = (sound_output.running_sample_index
-                                        * sound_output.bytes_per_sample)
-                                        % sound_output.secondary_buffer_size;
+                            if !sound_is_valid {
+                                sound_output.running_sample_index =
+                                    write_cursor / sound_output.bytes_per_sample;
+                                sound_is_valid = true;
+                            }
 
-                                    let expected_sound_bytes_per_frame: u32 = ((sound_output
-                                        .samples_per_second
-                                        * sound_output.bytes_per_sample)
-                                        as f32
-                                        / game_update_hz)
-                                        as u32;
+                            let byte_to_lock = (sound_output.running_sample_index
+                                * sound_output.bytes_per_sample)
+                                % sound_output.secondary_buffer_size;
 
-                                    let seconds_left_until_flip =
-                                        target_seconds_per_frame - from_begin_to_audio_seconds;
-                                    let expected_bytes_until_flip: u32 = ((seconds_left_until_flip
-                                        / target_seconds_per_frame)
-                                        * expected_sound_bytes_per_frame as f32)
-                                        as u32;
+                            let expected_sound_bytes_per_frame: u32 =
+                                ((sound_output.samples_per_second * sound_output.bytes_per_sample)
+                                    as f32
+                                    / game_update_hz) as u32;
 
-                                    let expected_frame_boundary_byte =
-                                        play_cursor + expected_bytes_until_flip;
+                            let seconds_left_until_flip =
+                                target_seconds_per_frame - from_begin_to_audio_seconds;
+                            let expected_bytes_until_flip: u32 = ((seconds_left_until_flip
+                                / target_seconds_per_frame)
+                                * expected_sound_bytes_per_frame as f32)
+                                as u32;
 
-                                    let mut safe_write_cursor = write_cursor;
-                                    if safe_write_cursor < play_cursor {
-                                        safe_write_cursor += sound_output.secondary_buffer_size;
-                                    }
+                            let expected_frame_boundary_byte =
+                                play_cursor + expected_bytes_until_flip;
 
-                                    debug_assert!(safe_write_cursor >= play_cursor);
-                                    safe_write_cursor += sound_output.safety_bytes;
+                            let mut safe_write_cursor = write_cursor;
+                            if safe_write_cursor < play_cursor {
+                                safe_write_cursor += sound_output.secondary_buffer_size;
+                            }
 
-                                    let audio_card_is_low_latency =
-                                        safe_write_cursor < expected_frame_boundary_byte;
+                            debug_assert!(safe_write_cursor >= play_cursor);
+                            safe_write_cursor += sound_output.safety_bytes;
 
-                                    let mut target_cursor;
-                                    if audio_card_is_low_latency {
-                                        target_cursor = expected_frame_boundary_byte
-                                            + expected_sound_bytes_per_frame
-                                    } else {
-                                        target_cursor = write_cursor
-                                            + expected_sound_bytes_per_frame
-                                            + sound_output.safety_bytes
-                                    }
+                            let audio_card_is_low_latency =
+                                safe_write_cursor < expected_frame_boundary_byte;
 
-                                    target_cursor %= sound_output.secondary_buffer_size;
+                            let mut target_cursor = if audio_card_is_low_latency {
+                                expected_frame_boundary_byte + expected_sound_bytes_per_frame
+                            } else {
+                                write_cursor
+                                    + expected_sound_bytes_per_frame
+                                    + sound_output.safety_bytes
+                            };
 
-                                    let mut bytes_to_write;
-                                    if byte_to_lock > target_cursor {
-                                        bytes_to_write =
-                                            sound_output.secondary_buffer_size - byte_to_lock;
-                                        bytes_to_write += target_cursor;
-                                    } else {
-                                        bytes_to_write = target_cursor - byte_to_lock;
-                                    }
+                            target_cursor %= sound_output.secondary_buffer_size;
 
-                                    let sound_buffer = GameSoundOutputBuffer {
-                                        samples_per_second: sound_output.samples_per_second,
-                                        sample_count: bytes_to_write
-                                            / sound_output.bytes_per_sample,
-                                        samples: samples as *mut i16,
-                                    };
+                            let bytes_to_write = if byte_to_lock > target_cursor {
+                                sound_output.secondary_buffer_size - byte_to_lock + target_cursor
+                            } else {
+                                target_cursor - byte_to_lock
+                            };
 
-                                    if let Some(game_get_sound_samples) = game.get_sound_samples {
-                                        game_get_sound_samples(
-                                            &thread,
-                                            &mut game_memory,
-                                            &sound_buffer,
-                                        );
-                                    }
+                            let sound_buffer = GameSoundOutputBuffer {
+                                samples_per_second: sound_output.samples_per_second,
+                                sample_count: bytes_to_write / sound_output.bytes_per_sample,
+                                samples: samples as *mut i16,
+                            };
 
-                                    #[cfg(feature = "gaming_internal")]
-                                    {
-                                        let marker =
-                                            &mut debug_time_markers[debug_time_marker_index];
-                                        marker.output_play_cursor = play_cursor;
-                                        marker.output_write_cursor = write_cursor;
-                                        marker.output_location = byte_to_lock;
-                                        marker.output_byte_count = bytes_to_write;
-                                        marker.expected_flip_play_cursor =
-                                            expected_frame_boundary_byte;
+                            if let Some(game_get_sound_samples) = game.get_sound_samples {
+                                game_get_sound_samples(&thread, &mut game_memory, &sound_buffer);
+                            }
 
-                                        let mut unwrapped_write_cursor = write_cursor;
-                                        if unwrapped_write_cursor < play_cursor {
-                                            unwrapped_write_cursor +=
-                                                sound_output.secondary_buffer_size;
-                                        }
-                                        audio_latency_bytes = unwrapped_write_cursor - play_cursor;
+                            #[cfg(feature = "gaming_internal")]
+                            {
+                                let marker = &mut debug_time_markers[debug_time_marker_index];
+                                marker.output_play_cursor = play_cursor;
+                                marker.output_write_cursor = write_cursor;
+                                marker.output_location = byte_to_lock;
+                                marker.output_byte_count = bytes_to_write;
+                                marker.expected_flip_play_cursor = expected_frame_boundary_byte;
 
-                                        audio_latency_seconds = (audio_latency_bytes as f32
-                                            / sound_output.bytes_per_sample as f32)
-                                            / sound_output.samples_per_second as f32;
+                                let mut unwrapped_write_cursor = write_cursor;
+                                if unwrapped_write_cursor < play_cursor {
+                                    unwrapped_write_cursor += sound_output.secondary_buffer_size;
+                                }
+                                audio_latency_bytes = unwrapped_write_cursor - play_cursor;
 
-                                        let debug_sound_output = format!(
+                                audio_latency_seconds = (audio_latency_bytes as f32
+                                    / sound_output.bytes_per_sample as f32)
+                                    / sound_output.samples_per_second as f32;
+
+                                let debug_sound_output = format!(
                                             "pc: {play_cursor} wc: {write_cursor} delta: {audio_latency_bytes} {audio_latency_seconds}"
                                         );
-                                        // dbg!(debug_sound_output);
-                                    }
-
-                                    win32_fill_sound_buffer(
-                                        &mut sound_output,
-                                        byte_to_lock,
-                                        bytes_to_write,
-                                        sound_buffer,
-                                    );
-                                }
-                                Err(e) => {
-                                    sound_is_valid = false;
-                                    dbg!(e);
-                                }
+                                // dbg!(debug_sound_output);
                             }
+
+                            win32_fill_sound_buffer(
+                                &mut sound_output,
+                                byte_to_lock,
+                                bytes_to_write,
+                                sound_buffer,
+                            );
 
                             let work_counter = win32_get_wall_clock();
                             let work_seconds_elapsed =
@@ -1672,12 +1716,6 @@ pub fn win32_main() -> Result<()> {
                                 1000.0 * win32_get_seconds_elapsed(last_counter, end_counter);
                             last_counter = end_counter;
 
-                            let dimension =
-                                win32_get_window_dimension(window).unwrap_or_else(|e| {
-                                    dbg!(e);
-                                    Default::default()
-                                });
-
                             #[cfg(feature = "gaming_internal")]
                             // win32_debug_sync_display(
                             //     GLOBAL_BACK_BUFFER.can_into(),
@@ -1689,12 +1727,17 @@ pub fn win32_main() -> Result<()> {
                             // );
                             let device_context = GetDC(window);
 
-                            win32_display_buffer_in_window(
-                                device_context,
-                                GLOBAL_BACK_BUFFER.can_into(),
-                                dimension.0,
-                                dimension.1,
-                            );
+                            match win32_get_window_dimension(window) {
+                                Ok(dimension) => win32_display_buffer_in_window(
+                                    device_context,
+                                    GLOBAL_BACK_BUFFER.can_into(),
+                                    dimension.0,
+                                    dimension.1,
+                                ),
+                                Err(e) => {
+                                    dbg!(e);
+                                }
+                            };
 
                             ReleaseDC(window, device_context);
 
@@ -1704,25 +1747,21 @@ pub fn win32_main() -> Result<()> {
                             {
                                 let mut play_cursor = 0;
                                 let mut write_cursor = 0;
-                                match SECONDARY_BUFFER.as_ref().unwrap().GetCurrentPosition(
-                                    Some(&mut play_cursor),
-                                    Some(&mut write_cursor),
-                                ) {
-                                    Ok(_) => {
-                                        debug_assert!(
-                                            debug_time_marker_index < debug_time_markers.len()
-                                        );
-
-                                        let marker =
-                                            &mut debug_time_markers[debug_time_marker_index];
-
-                                        marker.flip_play_cursor = play_cursor;
-                                        marker.flip_write_cursor = write_cursor;
-                                    }
-                                    Err(e) => {
-                                        dbg!(e);
-                                    }
+                                if let Err(e) =
+                                    SECONDARY_BUFFER.as_ref().unwrap().GetCurrentPosition(
+                                        Some(&mut play_cursor),
+                                        Some(&mut write_cursor),
+                                    )
+                                {
+                                    dbg!(e);
                                 }
+
+                                debug_assert!(debug_time_marker_index < debug_time_markers.len());
+
+                                let marker = &mut debug_time_markers[debug_time_marker_index];
+
+                                marker.flip_play_cursor = play_cursor;
+                                marker.flip_write_cursor = write_cursor;
                             }
 
                             swap(new_input, old_input);
@@ -1738,8 +1777,10 @@ pub fn win32_main() -> Result<()> {
                                 "{:.02}ms/f, {}f/s, {}mc/f \n",
                                 ms_per_frame, fps, megac_per_frame
                             );
+                            // dbg!(timer_output);
+
                             // let debug_sound_output = format!("PC:{play_cursor} BTL:{byte_to_lock} TC:{target_cursor} BTW:{bytes_to_write}");
-                            // OutputDebugStringW(&HSTRING::from(timer_output));
+                            // "{timer_output});
                             // dbg!(debug_sound_output);
                             #[cfg(feature = "gaming_internal")]
                             {
@@ -1774,28 +1815,25 @@ fn win32_playback_input(win32_state: &mut Win32State, new_input: &mut GameInput)
             memory_size,
         );
 
-        match ReadFile(
+        if let Err(e) = ReadFile(
             win32_state.playback_handle,
             Some(read_buffer),
             Some(&mut bytes_read),
             None,
         ) {
-            Ok(()) => {
-                if bytes_read == 0 {
-                    let playing_index = win32_state.input_playing_index;
-                    win32_end_input_playback(win32_state).unwrap();
-                    win32_begin_input_playback(win32_state, playing_index).unwrap();
-                    if let Err(e) = ReadFile(
-                        win32_state.playback_handle,
-                        Some(read_buffer),
-                        Some(&mut bytes_read),
-                        None,
-                    ) {
-                        dbg!(e);
-                    }
-                }
-            }
-            Err(e) => {
+            dbg!(e);
+        }
+
+        if bytes_read == 0 {
+            let playing_index = win32_state.input_playing_index;
+            win32_end_input_playback(win32_state).unwrap();
+            win32_begin_input_playback(win32_state, playing_index).unwrap();
+            if let Err(e) = ReadFile(
+                win32_state.playback_handle,
+                Some(read_buffer),
+                Some(&mut bytes_read),
+                None,
+            ) {
                 dbg!(e);
             }
         }
@@ -1926,14 +1964,14 @@ fn win32_get_exe_file_name(state: &mut Win32State) {
     state.exe_name = exe_path.file_name().unwrap().to_str().unwrap().to_string();
 }
 
-fn win32_build_exe_path_file_name(state: &Win32State, file_name: String, dest: &mut PathBuf) {
+fn win32_build_exe_path_file_name(state: &Win32State, file_name: &str, dest: &mut PathBuf) {
     let path = state.exe_full_path.parent().unwrap().join(file_name);
     dest.push(path);
 }
 
 fn win32_get_input_file_location(state: &Win32State, slot_index: usize, dest: &mut PathBuf) {
     debug_assert!(slot_index == 1);
-    win32_build_exe_path_file_name(state, "loop_playback.pb".to_string(), dest);
+    win32_build_exe_path_file_name(state, "loop_playback.pb", dest);
 }
 
 fn win32_get_replay_buffer(

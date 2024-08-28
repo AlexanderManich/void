@@ -1,17 +1,15 @@
 use std::{
-    default,
-    fmt::Result,
-    fs::File,
-    io::{self, Read},
+    io::{self},
     mem::{size_of, transmute},
-    path::{Path, PathBuf},
-    ptr::{addr_of, null_mut, read_unaligned, write_unaligned},
-    slice::from_raw_parts_mut,
+    path::PathBuf,
+    ptr::null_mut,
 };
 
 use std::ffi::c_void;
 
 use crate::{intrinsics::find_least_significant_set_bit, macros::*, random, tile::*};
+
+type MyResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 pub type GameGetSoundSamples =
     fn(thread: &ThreadContext, memory: &mut GameMemory, sound_buffer: &GameSoundOutputBuffer);
@@ -22,7 +20,6 @@ pub type GameUpdateAndRender = fn(
     memory: &mut GameMemory,
 );
 
-#[repr(C)]
 pub struct GameOffscreenBuffer {
     pub width: i32,
     pub height: i32,
@@ -174,14 +171,25 @@ impl Default for LoadedBitmap {
     }
 }
 
+#[derive(Default)]
+struct HeroBitMaps {
+    align_x: i32,
+    align_y: i32,
+
+    whole_player: LoadedBitmap,
+    cape: LoadedBitmap,
+}
 pub struct GameState {
     world_arena: MemoryArena,
     world: *mut World,
 
     pub player_p: TileMapPosition,
+    pub camera_p: TileMapPosition,
+
     backdrop: LoadedBitmap,
-    player: LoadedBitmap,
-    player_cape: LoadedBitmap,
+
+    hero_facing_direction: usize,
+    hero_bitmaps: Vec<HeroBitMaps>,
 }
 
 pub struct World {
@@ -308,11 +316,12 @@ struct BitmapHeader {
 fn debug_load_bmp(
     thread: &ThreadContext,
     read_entire_file: &DebugPlatformReadEntireFile,
-    file_name: PathBuf,
-) -> io::Result<LoadedBitmap> {
+    file_name: &str,
+) -> MyResult<LoadedBitmap> {
     let mut result = LoadedBitmap::default();
 
-    let read_result = read_entire_file(thread, file_name)?;
+    let read_result = read_entire_file(thread, PathBuf::from(file_name))
+        .map_err(|e| format!("{e}, {file_name}"))?;
 
     let header = unsafe { *read_result.contents.cast::<BitmapHeader>() };
     let contents = read_result.contents as *mut u32;
@@ -342,8 +351,8 @@ fn debug_load_bmp(
 
     let mut source_dest = pixels;
 
-    for y in 0..header.height {
-        for x in 0..header.width {
+    for _y in 0..header.height {
+        for _x in 0..header.width {
             let c = unsafe { source_dest.read_unaligned() };
             unsafe {
                 source_dest.write_unaligned(
@@ -428,26 +437,45 @@ pub fn game_update_and_render(
             game_state.backdrop = debug_load_bmp(
                 thread,
                 &memory.debug_platform_read_entire_file,
-                Path::new("game/test/test.bmp").to_path_buf(),
+                "game/test/test_background.bmp",
             )
             .unwrap();
-            game_state.player = debug_load_bmp(
-                thread,
-                &memory.debug_platform_read_entire_file,
-                Path::new("game/test/player.bmp").to_path_buf(),
-            )
-            .unwrap();
-            game_state.player_cape = debug_load_bmp(
-                thread,
-                &memory.debug_platform_read_entire_file,
-                Path::new("game/test/player_cape_front.bmp").to_path_buf(),
-            )
-            .unwrap();
+
+            game_state.hero_bitmaps.push({
+                HeroBitMaps {
+                    align_x: 22,
+                    align_y: 56,
+                    whole_player: debug_load_bmp(
+                        thread,
+                        &memory.debug_platform_read_entire_file,
+                        "game/test/player.bmp",
+                    )
+                    .unwrap(),
+                    cape: LoadedBitmap::default(),
+                }
+            });
+            game_state.hero_bitmaps.push(HeroBitMaps {
+                align_x: 22,
+                align_y: 56,
+                whole_player: debug_load_bmp(
+                    thread,
+                    &memory.debug_platform_read_entire_file,
+                    "game/test/player_cape_front.bmp",
+                )
+                .unwrap(),
+                cape: LoadedBitmap::default(),
+            });
 
             game_state.player_p.abs_tile_x = 3;
             game_state.player_p.abs_tile_y = 3;
             game_state.player_p.offset_x = 5.0;
             game_state.player_p.offset_y = 5.0;
+
+            game_state.camera_p.abs_tile_x = game_state.player_p.abs_tile_x;
+            game_state.camera_p.abs_tile_y = game_state.player_p.abs_tile_y;
+            game_state.camera_p.offset_x = game_state.player_p.offset_x;
+            game_state.camera_p.offset_y = game_state.player_p.offset_y;
+
             initialize_arena(
                 &mut game_state.world_arena,
                 memory.permanent_storage_size as usize - size_of::<GameState>(),
@@ -614,7 +642,9 @@ pub fn game_update_and_render(
                 let mut d_player_x = 0.0; // pixels/second
                 let mut d_player_y = 0.0; // pixels/second
 
+                //Fix facing directions when we have more bitmaps with facing directions
                 if controller.button_state.concrete_buttons.move_up.ended_down {
+                    game_state.hero_facing_direction = 0;
                     d_player_y = 1.0;
                 }
                 if controller
@@ -623,6 +653,7 @@ pub fn game_update_and_render(
                     .move_down
                     .ended_down
                 {
+                    game_state.hero_facing_direction = 0;
                     d_player_y = -1.0;
                 }
                 if controller
@@ -631,6 +662,7 @@ pub fn game_update_and_render(
                     .move_left
                     .ended_down
                 {
+                    game_state.hero_facing_direction = 0;
                     d_player_x = -1.0
                 }
                 if controller
@@ -639,13 +671,14 @@ pub fn game_update_and_render(
                     .move_right
                     .ended_down
                 {
+                    game_state.hero_facing_direction = 1;
                     d_player_x = 1.0;
                 }
 
                 // Walking Speed
                 let mut player_speed = 10.0;
                 if controller.button_state.concrete_buttons.back.ended_down {
-                    player_speed = 20.0;
+                    player_speed = 50.0;
                 }
 
                 d_player_x *= player_speed;
@@ -678,6 +711,7 @@ pub fn game_update_and_render(
                         }
                     }
                     game_state.player_p = new_player_p;
+                    game_state.camera_p = new_player_p;
                 }
             }
         }
@@ -694,7 +728,8 @@ pub fn game_update_and_render(
         //     1.0,
         // );
 
-        draw_bitmap(buffer, &game_state.backdrop, 0.0, 0.0);
+        // Draw background
+        draw_bitmap(buffer, &game_state.backdrop, 0.0, 0.0, None, None);
 
         //draw screen
         let screen_center_x: f32 = 0.5 * buffer.width as f32;
@@ -706,10 +741,10 @@ pub fn game_update_and_render(
                     .player_p
                     .abs_tile_x
                     .wrapping_add_signed(rel_column);
-                let row: u32 = game_state.player_p.abs_tile_y.wrapping_add_signed(rel_row);
+                let row: u32 = game_state.camera_p.abs_tile_y.wrapping_add_signed(rel_row);
 
                 let tile_id: u32 =
-                    get_tile_value(tile_map, column, row, game_state.player_p.abs_tile_z);
+                    get_tile_value(tile_map, column, row, game_state.camera_p.abs_tile_z);
 
                 if tile_id > 1 {
                     let mut gray: f32 = 0.5;
@@ -722,17 +757,17 @@ pub fn game_update_and_render(
                         gray = 0.25;
                     }
 
-                    if column == game_state.player_p.abs_tile_x
-                        && row == game_state.player_p.abs_tile_y
+                    if column == game_state.camera_p.abs_tile_x
+                        && row == game_state.camera_p.abs_tile_y
                     {
                         gray = 0.0;
                     }
 
                     let cen_x: f32 = screen_center_x
-                        - meters_to_pixels * game_state.player_p.offset_x
+                        - meters_to_pixels * game_state.camera_p.offset_x
                         + rel_column as f32 * tile_side_in_pixels as f32;
                     let cen_y: f32 = screen_center_y
-                        + meters_to_pixels * game_state.player_p.offset_y
+                        + meters_to_pixels * game_state.camera_p.offset_y
                         - (rel_row as f32 * tile_side_in_pixels as f32);
                     let min_x: f32 = cen_x - 0.5 * tile_side_in_pixels as f32;
                     let min_y: f32 = cen_y - 0.5 * tile_side_in_pixels as f32;
@@ -744,27 +779,63 @@ pub fn game_update_and_render(
             }
         }
 
-        let player_left = screen_center_x - 0.5 * player_width * meters_to_pixels;
-        let player_top = screen_center_y - player_height * meters_to_pixels;
+        // camera stuff that we might need? for now just scroll the screen.
+        //let diff = subtract(tile_map, &game_state.player_p, &game_state.camera_p);
 
-        //Draw Player
-        // draw_rectangle(
-        //     buffer,
-        //     player_left,
-        //     player_top,
-        //     player_left + meters_to_pixels * player_width,
-        //     player_top + meters_to_pixels * player_height,
-        //     1.0,
-        //     0.0,
-        //     0.0,
-        // );
+        let player_ground_point_x = screen_center_x; // + meters_to_pixels * diff.;
+        let player_ground_point_y = screen_center_y; // - meters_to_pixels * diff.dy;
 
-        draw_bitmap(buffer, &game_state.player_cape, player_left, player_top);
-        //draw_bitmap(buffer, &game_state.player, player_left, player_top);
+        let player_left = player_ground_point_x - 0.5 * player_width * meters_to_pixels;
+        let player_top = player_ground_point_y - player_height * meters_to_pixels;
+
+        // Draw Player
+        draw_rectangle(
+            buffer,
+            player_left,
+            player_top,
+            player_left + meters_to_pixels * player_width,
+            player_top + meters_to_pixels * player_height,
+            1.0,
+            0.0,
+            0.0,
+        );
+
+        let hero_bitmaps = &game_state.hero_bitmaps[game_state.hero_facing_direction];
+
+        draw_bitmap(
+            buffer,
+            &hero_bitmaps.whole_player,
+            player_ground_point_x,
+            player_ground_point_y,
+            Some(hero_bitmaps.align_x),
+            Some(hero_bitmaps.align_y),
+        );
+        draw_bitmap(
+            buffer,
+            &hero_bitmaps.cape,
+            player_ground_point_x,
+            player_ground_point_y,
+            Some(hero_bitmaps.align_x),
+            Some(hero_bitmaps.align_y),
+        );
     }
 }
 
-fn draw_bitmap(buffer: &GameOffscreenBuffer, bitmap: &LoadedBitmap, real_x: f32, real_y: f32) {
+fn draw_bitmap(
+    buffer: &GameOffscreenBuffer,
+    bitmap: &LoadedBitmap,
+    mut real_x: f32,
+    mut real_y: f32,
+    align_x: Option<i32>,
+    align_y: Option<i32>,
+) {
+    if align_x.is_some() {
+        real_x -= align_x.unwrap() as f32;
+    }
+    if align_y.is_some() {
+        real_y -= align_y.unwrap() as f32;
+    }
+
     let mut min_x: i32 = real_x.round() as i32;
     let mut min_y: i32 = real_y.round() as i32;
     let mut max_x: i32 = (real_x + bitmap.width as f32).round() as i32;
