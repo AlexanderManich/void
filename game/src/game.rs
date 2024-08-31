@@ -7,7 +7,7 @@ use std::{
 
 use std::ffi::c_void;
 
-use crate::{intrinsics::find_least_significant_set_bit, macros::*, math::Vec2, random, tile::*};
+use crate::{intrinsics::find_least_significant_set_bit, macros::*, math::*, random, tile::*};
 
 type MyResult<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -183,8 +183,9 @@ pub struct GameState {
     world_arena: MemoryArena,
     world: *mut World,
 
-    pub player_p: TileMapPosition,
     pub camera_p: TileMapPosition,
+    pub player_p: TileMapPosition,
+    d_player_p: Vec2,
 
     backdrop: LoadedBitmap,
 
@@ -635,12 +636,12 @@ pub fn game_update_and_render(
 
             if controller.is_analog {
             } else {
-                let mut d_player = Vec2::default(); // pixels/second
+                let mut dd_player = Vec2::default(); // pixels/second
 
                 //Fix facing directions when we have more bitmaps with facing directions
                 if controller.button_state.concrete_buttons.move_up.ended_down {
                     game_state.hero_facing_direction = 0;
-                    d_player.y = 1.0;
+                    dd_player.y = 1.0;
                 }
                 if controller
                     .button_state
@@ -649,7 +650,7 @@ pub fn game_update_and_render(
                     .ended_down
                 {
                     game_state.hero_facing_direction = 0;
-                    d_player.y = -1.0;
+                    dd_player.y = -1.0;
                 }
                 if controller
                     .button_state
@@ -658,7 +659,7 @@ pub fn game_update_and_render(
                     .ended_down
                 {
                     game_state.hero_facing_direction = 0;
-                    d_player.x = -1.0
+                    dd_player.x = -1.0
                 }
                 if controller
                     .button_state
@@ -667,23 +668,29 @@ pub fn game_update_and_render(
                     .ended_down
                 {
                     game_state.hero_facing_direction = 1;
-                    d_player.x = 1.0;
+                    dd_player.x = 1.0;
+                }
+
+                if dd_player.x != 0.0 && dd_player.y != 0.0 {
+                    dd_player *= 0.5f32.sqrt();
                 }
 
                 // Walking Speed
-                let mut player_speed = 10.0;
+                let mut player_speed = 20.0; // meters/second^2
                 if controller.button_state.concrete_buttons.back.ended_down {
-                    player_speed = 50.0;
+                    player_speed = 50.0; // meters/second^2
                 }
+                dd_player *= player_speed;
 
-                d_player *= player_speed;
-
-                if d_player.x != 0.0 && d_player.y != 0.0 {
-                    d_player *= 0.5f32.sqrt();
-                }
+                dd_player += 2.0 * -game_state.d_player_p;
 
                 let mut new_player_p = game_state.player_p;
-                new_player_p.offset += d_player * input.dt_for_frame;
+                // 1/2 * a * dt + v * dt + p
+                new_player_p.offset = 0.5 * dd_player * square(input.dt_for_frame)
+                    + game_state.d_player_p * input.dt_for_frame
+                    + new_player_p.offset;
+
+                game_state.d_player_p = dd_player * input.dt_for_frame + game_state.d_player_p;
 
                 new_player_p = recanonicalize_position(&tile_map, new_player_p);
 
