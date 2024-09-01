@@ -676,13 +676,13 @@ pub fn game_update_and_render(
                 }
 
                 // Walking Speed
-                let mut player_speed = 20.0; // meters/second^2
+                let mut player_speed = 100.0; // meters/second^2
                 if controller.button_state.concrete_buttons.back.ended_down {
-                    player_speed = 50.0; // meters/second^2
+                    player_speed *= 3.0; // meters/second^2
                 }
                 dd_player *= player_speed;
 
-                dd_player += 2.0 * -game_state.d_player_p;
+                dd_player += 3.5 * -game_state.d_player_p;
 
                 let mut new_player_p = game_state.player_p;
                 // 1/2 * a * dt + v * dt + p
@@ -702,11 +702,44 @@ pub fn game_update_and_render(
                 player_right.offset.x += player_width * 0.5;
                 player_right = recanonicalize_position(&tile_map, player_right);
 
-                if is_tile_map_point_empty(&tile_map, new_player_p)
-                    && is_tile_map_point_empty(&tile_map, player_left)
-                    && is_tile_map_point_empty(&tile_map, player_right)
-                {
-                    if are_on_same_tile(&game_state.player_p, &new_player_p) {
+                let mut collided = false;
+                let mut col_p = TileMapPosition::default();
+
+                if !is_tile_map_point_empty(tile_map, new_player_p) {
+                    col_p = new_player_p;
+                    collided = true;
+                }
+
+                if !is_tile_map_point_empty(tile_map, player_left) {
+                    col_p = player_left;
+                    collided = true;
+                }
+
+                if !is_tile_map_point_empty(tile_map, player_right) {
+                    col_p = player_right;
+                    collided = true;
+                }
+
+                if collided {
+                    let mut r = Vec2::default();
+
+                    if col_p.abs_tile_x < game_state.player_p.abs_tile_x {
+                        r = Vec2::new(1.0, 0.0);
+                    }
+                    if col_p.abs_tile_x > game_state.player_p.abs_tile_x {
+                        r = Vec2::new(-1.0, 0.0);
+                    }
+                    if col_p.abs_tile_y < game_state.player_p.abs_tile_y {
+                        r = Vec2::new(0.0, 1.0);
+                    }
+                    if col_p.abs_tile_y > game_state.player_p.abs_tile_y {
+                        r = Vec2::new(0.0, -1.0);
+                    }
+
+                    game_state.d_player_p =
+                        game_state.d_player_p - 1.0 * game_state.d_player_p.dot(r) * r;
+                } else {
+                    if !are_on_same_tile(&game_state.player_p, &new_player_p) {
                         let new_tile_value = get_tile_value_from_map_pos(tile_map, new_player_p);
                         if new_tile_value == 3 {
                             new_player_p.abs_tile_z += 1;
@@ -721,19 +754,17 @@ pub fn game_update_and_render(
         }
 
         //Clear Screen
-        // draw_rectangle(
-        //     buffer,
-        //     0.0,
-        //     0.0,
-        //     buffer.width as f32,
-        //     buffer.height as f32,
-        //     1.0,
-        //     0.0,
-        //     1.0,
-        // );
+        draw_rectangle(
+            buffer,
+            Vec2::new(0.0, 0.0),
+            Vec2::new(buffer.width as f32, buffer.height as f32),
+            1.0,
+            0.0,
+            1.0,
+        );
 
         // Draw background
-        draw_bitmap(buffer, &game_state.backdrop, 0.0, 0.0, None, None);
+        // draw_bitmap(buffer, &game_state.backdrop, 0.0, 0.0, None, None);
 
         //draw screen
         let screen_center_x: f32 = 0.5 * buffer.width as f32;

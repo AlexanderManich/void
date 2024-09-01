@@ -204,26 +204,18 @@ impl Default for Win32State {
     }
 }
 
-fn win32_get_last_write_time(file_name: &HSTRING) -> FILETIME {
-    let mut last_write_time: FILETIME = Default::default();
-
+fn win32_get_last_write_time(file_name: &HSTRING) -> Result<FILETIME> {
     let mut data: WIN32_FILE_ATTRIBUTE_DATA = Default::default();
     unsafe {
-        match GetFileAttributesExW(
+        GetFileAttributesExW(
             file_name,
             GetFileExInfoStandard,
             &mut data as *mut _ as *mut c_void,
-        ) {
-            Ok(()) => {
-                last_write_time = data.ftLastWriteTime;
-            }
-            Err(e) => {
-                dbg!(e);
-            }
-        };
+        )?;
     }
+    let last_write_time = data.ftLastWriteTime;
 
-    last_write_time
+    Ok(last_write_time)
 }
 
 #[no_mangle]
@@ -235,7 +227,12 @@ fn win32_load_game_code(source_dll_name: &HSTRING, temp_dll_name: &HSTRING) -> W
         update_and_render: None,
     };
 
-    result.dll_last_write_time = win32_get_last_write_time(source_dll_name);
+    match win32_get_last_write_time(source_dll_name) {
+        Ok(last_write_time) => result.dll_last_write_time = last_write_time,
+        Err(e) => {
+            dbg!(e);
+        }
+    }
 
     unsafe {
         if let Err(e) = CopyFileW(source_dll_name, temp_dll_name, false) {
@@ -1293,8 +1290,14 @@ pub fn win32_main() -> Result<()> {
                     while GLOBAL_RUNNING {
                         new_input.dt_for_frame = target_seconds_per_frame;
 
-                        let new_dll_write_time =
-                            win32_get_last_write_time(source_game_code_dll_full_path);
+                        let mut new_dll_write_time = FILETIME::default();
+                        match win32_get_last_write_time(source_game_code_dll_full_path) {
+                            Ok(last_write_time) => new_dll_write_time = last_write_time,
+                            Err(e) => {
+                                dbg!(e);
+                            }
+                        };
+
                         if CompareFileTime(&new_dll_write_time, &game.dll_last_write_time) != 0 {
                             win32_unload_game_code(&mut game);
                             game = win32_load_game_code(

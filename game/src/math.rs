@@ -10,6 +10,10 @@ impl Vec2 {
     pub fn new(x: f32, y: f32) -> Self {
         Self { x: x, y: y }
     }
+
+    pub fn dot(self, op: Vec2) -> f32 {
+        self.x * op.x + self.y * op.y
+    }
 }
 
 impl ops::Add<Vec2> for Vec2 {
@@ -116,5 +120,24 @@ mod tests {
 
         assert_eq!(lhs * 2.0, Vec2::new(2.0, 2.0));
         assert_eq!(lhs, Vec2::new(1.0, 1.0));
+    }
+
+    #[test]
+    fn dot() {
+        let vec = Vec2::new(2.0, 3.0);
+        let op = Vec2::new(-4.0, -5.0);
+
+        let result = vec.dot(op);
+
+        assert_eq!(result, -23.0);
+        assert_eq!(vec, Vec2::new(2.0, 3.0));
+        assert_eq!(op, Vec2::new(-4.0, -5.0));
+    }
+
+    #[test]
+    fn default() {
+        let result = Vec2::default();
+
+        assert_eq!(result, Vec2::new(0.0, 0.0));
     }
 }
