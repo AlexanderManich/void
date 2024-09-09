@@ -1,4 +1,5 @@
 #![deny(unsafe_op_in_unsafe_fn)]
+
 use crate::macros::*;
 use game::game::*;
 use std::{
@@ -6,7 +7,7 @@ use std::{
     env::current_exe,
     ffi::c_void,
     io,
-    mem::{self, size_of, transmute},
+    mem::{self, size_of, size_of_val, transmute},
     path::PathBuf,
     ptr::{self, addr_of_mut, null_mut, swap},
     slice,

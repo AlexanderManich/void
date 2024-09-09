@@ -3,11 +3,18 @@ name = "gaming"
 version = "0.1.0"
 edition = "2021"
 
-[dependencies]
-game = { path = "game" }
+[[bin]]
+name = "gaming"
 
+[lib]
+name = "game"
+path = "src/game/src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[target.'cfg(windows)'.dependencies]
 [dependencies.windows]
 version = "0.51"
+
 features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Gdi",

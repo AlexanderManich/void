@@ -436,7 +436,7 @@ pub fn game_update_and_render(
             game_state.backdrop = debug_load_bmp(
                 thread,
                 &memory.debug_platform_read_entire_file,
-                "game/test/test_background.bmp",
+                "src/game/test/test_background.bmp",
             )
             .unwrap();
 
@@ -447,7 +447,7 @@ pub fn game_update_and_render(
                     whole_player: debug_load_bmp(
                         thread,
                         &memory.debug_platform_read_entire_file,
-                        "game/test/player.bmp",
+                        "src/game/test/player.bmp",
                     )
                     .unwrap(),
                     cape: LoadedBitmap::default(),
@@ -459,7 +459,7 @@ pub fn game_update_and_render(
                 whole_player: debug_load_bmp(
                     thread,
                     &memory.debug_platform_read_entire_file,
-                    "game/test/player_cape_front.bmp",
+                    "src/game/test/player_cape_front.bmp",
                 )
                 .unwrap(),
                 cape: LoadedBitmap::default(),
