@@ -432,7 +432,7 @@ fn toggle_fullscreen(window: HWND) {
             let mi: &mut MONITORINFO = &mut MONITORINFO::default();
             mi.cbSize = size_of_val(mi) as u32;
 
-            if let Ok(()) = GetWindowPlacement(window, &mut GLOBAL_WINDOW_POSITION) {
+            if let Ok(()) = GetWindowPlacement(window, addr_of_mut!(GLOBAL_WINDOW_POSITION)) {
                 if GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY), mi).0 != 0 {
                     SetWindowLongW(window, GWL_STYLE, dw_style & !WS_OVERLAPPEDWINDOW.0 as i32);
                     SetWindowPos(
@@ -449,7 +449,7 @@ fn toggle_fullscreen(window: HWND) {
             }
         } else {
             SetWindowLongW(window, GWL_STYLE, dw_style | WS_OVERLAPPEDWINDOW.0 as i32);
-            SetWindowPlacement(window, &mut GLOBAL_WINDOW_POSITION).unwrap();
+            SetWindowPlacement(window, addr_of_mut!(GLOBAL_WINDOW_POSITION)).unwrap();
             SetWindowPos(
                 window,
                 None,

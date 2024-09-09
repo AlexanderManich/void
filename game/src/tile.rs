@@ -1,7 +1,7 @@
 use std::ptr::null_mut;
 
 use crate::{
-    game::{push_size_, MemoryArena},
+    game::{push_size, MemoryArena},
     macros::push_array,
     math::Vec2,
 };

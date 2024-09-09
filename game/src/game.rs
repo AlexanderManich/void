@@ -934,7 +934,7 @@ fn draw_bitmap(
     }
 }
 
-pub fn push_size_(arena: &mut MemoryArena, size: usize) -> *mut c_void {
+pub fn push_size(arena: &mut MemoryArena, size: usize) -> *mut c_void {
     debug_assert!((arena.used + size) <= arena.size);
     let result = unsafe { arena.base.add(arena.used) };
     arena.used += size;
