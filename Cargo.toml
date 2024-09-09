@@ -11,9 +11,9 @@ name = "game"
 path = "src/game/src/lib.rs"
 crate-type = ["cdylib", "rlib"]
 
-[target.'cfg(windows)'.dependencies]
 [dependencies.windows]
 version = "0.51"
+optional = true
 
 features = [
     "Win32_UI_WindowsAndMessaging",
@@ -36,6 +36,9 @@ features = [
 
 [features]
 # Features in default are enabled, others are disabled.
-default = ["gaming_slow", "gaming_internal"]
+default = ["gaming_slow", "gaming_internal", "os"]
 gaming_internal = []
 gaming_slow = []
+
+# Will build dependencies for the os specified here.
+os = ["windows"]
