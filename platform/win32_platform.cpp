@@ -5,7 +5,7 @@
 #include "win32_platform.h"
 
 bool32 GLOBAL_RUNNING = true;
-Win32OffScreenBuffer GLOBAL_BACKBUFFER;
+Win32OffscreenBuffer GLOBAL_BACKBUFFER = {};
 
 Win32WindowDimension
 win32_get_window_dimension(HWND window) {
@@ -92,7 +92,7 @@ win32_process_pending_messages(Win32State win32_state, GameControllerInput keybo
 }
 
 void
-win32_resize_dib_section(Win32OffScreenBuffer *buffer, i32 width, i32 height) {
+win32_resize_dib_section(Win32OffscreenBuffer *buffer, i32 width, i32 height) {
     if (buffer->memory) {
         VirtualFree(buffer->memory, 0, MEM_RELEASE);
     }
@@ -123,7 +123,7 @@ win32_resize_dib_section(Win32OffScreenBuffer *buffer, i32 width, i32 height) {
 void
 win32_display_buffer_in_window(
     HDC device_context,
-    Win32OffScreenBuffer *buffer,
+    Win32OffscreenBuffer *buffer,
     i32 window_height,
     i32 window_width
 ) {
@@ -215,9 +215,11 @@ main_window_callback(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
             Win32WindowDimension dimension = win32_get_window_dimension(window);
             win32_display_buffer_in_window(device_context, &GLOBAL_BACKBUFFER, dimension.height, dimension.width);
             EndPaint(window, &paint);
+            break;
         }
         default: {
             result = DefWindowProc(window, message, wparam, lparam);
+            break;
         }
     }
 
@@ -226,6 +228,11 @@ main_window_callback(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
 
 int CALLBACK
 WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int show_code) {
+
+    (void)command_line;
+    (void)show_code;
+
+    Win32State win32_state = {};
 
     WNDCLASS window_class = {};
 
@@ -237,7 +244,7 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
     window_class.lpszClassName = L"VoidWindowClass";
 
     if (RegisterClass(&window_class) != 0) {
-        HWND window_handle = CreateWindowEx(
+        HWND window = CreateWindowEx(
             0,
             window_class.lpszClassName,
             L"Void",
@@ -251,20 +258,56 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
             window_class.hInstance,
             0
         );
-        if (window_handle) {
-            MSG message;
-            while (1) {
-                HDC refresh_dc = GetDC(window_handle);
-                u32 monitor_refresh_hz = 60;
-                i32 win32_refresh_rate = GetDeviceCaps(refresh_dc, VREFRESH);
-                ReleaseDC(window_handle, refresh_dc);
+        if (window) {
+            HDC refresh_dc = GetDC(window);
+            u32 monitor_refresh_hz = 60;
+            i32 win32_refresh_rate = GetDeviceCaps(refresh_dc, VREFRESH);
+            ReleaseDC(window, refresh_dc);
 
-                if (win32_refresh_rate > 1) {
-                    monitor_refresh_hz = win32_refresh_rate;
-                }
+            if (win32_refresh_rate > 1) {
+                monitor_refresh_hz = win32_refresh_rate;
+            }
 
-                GLOBAL_RUNNING = true;
+            // TODO: If game_update_hz is too big, sound starts bugging. Ideally It should be monitor_refresh_hz / 2
+            f32 game_update_hz = monitor_refresh_hz / 2.0;
+            f32 target_seconds_per_frame = 1.0 / game_update_hz;
 
+            Win32SoundOutput sound_output = {};
+            sound_output.samples_per_second = 48000;
+            sound_output.running_sample_index = 0;
+            sound_output.bytes_per_sample = sizeof(i16) * 2;
+            sound_output.secondary_buffer_size =
+                sound_output.samples_per_second * sound_output.bytes_per_sample;
+            // sound_output.safety_bytes = ((sound_output.samples_per_second as f32
+            //     * sound_output.bytes_per_sample as f32
+            //     / game_update_hz)
+            //     / 3.0) as u32;
+
+            GLOBAL_RUNNING = true;
+
+            while (GLOBAL_RUNNING) {
+
+                GameOffscreenBuffer buffer = {
+                    .width = GLOBAL_BACKBUFFER.width,
+                    .height = GLOBAL_BACKBUFFER.height,
+                    .memory = GLOBAL_BACKBUFFER.memory,
+                    .pitch = GLOBAL_BACKBUFFER.pitch,
+                    .bytes_per_pixel = GLOBAL_BACKBUFFER.bytes_per_pixel,
+                };
+
+                i32 xoffset = 0;
+                i32 yoffset = 0;
+                render_gradient(&buffer, xoffset, yoffset);
+
+                HDC device_context = GetDC(window);
+
+                Win32WindowDimension dim = win32_get_window_dimension(window);
+                win32_display_buffer_in_window(device_context, &GLOBAL_BACKBUFFER, dim.height, dim.width);
+
+                ReleaseDC(window, device_context);
+
+                ++xoffset;
+                yoffset += 2;
                 // win32_process_pending_messages(win32_state, new_keyboard_controller);
             }
         }

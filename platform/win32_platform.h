@@ -5,8 +5,8 @@ struct Win32State {
 
 };
 
-typedef struct Win32OffScreenBuffer Win32OffScreenBuffer;
-struct Win32OffScreenBuffer {
+typedef struct Win32OffscreenBuffer Win32OffscreenBuffer;
+struct Win32OffscreenBuffer {
     i32 width;
     i32 height;
     void *memory;
@@ -15,59 +15,28 @@ struct Win32OffScreenBuffer {
     i32 bytes_per_pixel;
 };
 
-typedef struct GameButtonState GameButtonState;
-struct GameButtonState {
-    i32 half_transition_count;
-    bool32 ended_down;
-};
-
-typedef struct ConcreteGameButtonState ConcreteGameButtonState;
-struct ConcreteGameButtonState {
-    GameButtonState move_up;
-    GameButtonState move_down;
-    GameButtonState move_left;
-    GameButtonState move_right;
-
-    GameButtonState action_up;
-    GameButtonState action_down;
-    GameButtonState action_left;
-    GameButtonState action_right;
-
-    GameButtonState left_shouder;
-    GameButtonState right_shoulder;
-    
-    GameButtonState back;
-    GameButtonState start;
-};
-
-typedef struct GameControllerInput GameControllerInput;
-struct GameControllerInput {
-    bool32 is_analog;
-    bool32 is_connected;
-    
-    f32 stick_average_x;
-    f32 stick_average_y;
-
-    union {
-        GameButtonState buttons[12];
-        ConcreteGameButtonState concrete_buttons;
-    };
-};
-
-typedef struct GameInput GameInput;
-struct GameInput {
-    GameButtonState mouse_buttons[5];
-    i32 mouse_x;
-    i32 mouse_y;
-    i32 mouse_z;
-
-    GameControllerInput controllers[5];
-
-    f32 dt_for_frame;
-};
 
 typedef struct Win32WindowDimension Win32WindowDimension;
 struct Win32WindowDimension {
     i32 width;
     i32 height;
+};
+
+typedef struct Win32GameCode Win32GameCode;
+typedef struct Win32GameCode {
+    HMODULE game_code_dll;
+    FILETIME dll_last_write_time;
+    GameGetSoundSample get_sound_samples;
+    GameUpdateAndRender update_and_render;
+};
+
+// Sound
+typedef struct Win32SoundOutput Win32SoundOutput;
+struct Win32SoundOutput {
+    u32 samples_per_second;
+    u32 running_sample_index;
+    u32 bytes_per_sample;
+    u32 secondary_buffer_size;
+    u32 latency_sample_count;
+    u32 safety_bytes;
 };
