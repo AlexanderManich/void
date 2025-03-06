@@ -16,3 +16,8 @@ void render_gradient(GameOffscreenBuffer *buffer, i32 blue_offset, i32 green_off
         row += buffer->pitch;
     }
 }
+
+GameControllerInput *get_controller(GameInput *input, u64 controller_index) {
+    // assert!(controller_index < input.controllers.len());
+    return &input->controllers[controller_index];
+}

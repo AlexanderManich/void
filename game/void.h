@@ -15,6 +15,8 @@ typedef int32_t bool32;
 #define false 0
 #define true 1
 
+#define memory_zero(s, n) (memset(s, 0, n))
+
 // Game Input
 typedef struct GameButtonState GameButtonState;
 struct GameButtonState {
@@ -108,3 +110,5 @@ typedef void (*GameGetSoundSample)(ThreadContext *thread, GameMemory *memory, Ga
 typedef void (*GameUpdateAndRender)(ThreadContext *thread, GameOffscreenBuffer *buffer, GameInput* input, GameMemory* memory);
 
 void render_gradient(GameOffscreenBuffer *buffer, i32 blue_offset, i32 green_offset);
+
+GameControllerInput *get_controller(GameInput *input, u64 controller_index);

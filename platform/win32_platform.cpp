@@ -3,6 +3,7 @@
 
 #include <windows.h>
 #include "win32_platform.h"
+#include <stdio.h>
 
 bool32 GLOBAL_RUNNING = true;
 Win32OffscreenBuffer GLOBAL_BACKBUFFER = {};
@@ -19,6 +20,29 @@ win32_get_window_dimension(HWND window) {
     return result;
 }
 
+WINDOWPLACEMENT g_wpPrev = { sizeof(g_wpPrev) };
+void toggle_fullscreen(HWND window) {
+
+
+    i32 dw_style = GetWindowLongW(window, GWL_STYLE);
+    if (dw_style & WS_OVERLAPPEDWINDOW) {
+        MONITORINFO mi = { sizeof(mi) };
+        if (GetWindowPlacement(window, &g_wpPrev) && GetMonitorInfo(MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY), &mi)) {
+            SetWindowLong(window, GWL_STYLE, dw_style & ~WS_OVERLAPPEDWINDOW);
+            SetWindowPos(window, HWND_TOP,
+                         mi.rcMonitor.left, mi.rcMonitor.top,
+                         mi.rcMonitor.right - mi.rcMonitor.left,
+                         mi.rcMonitor.bottom - mi.rcMonitor.top,
+                         SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+        }
+    }
+    else {
+        SetWindowLong(window, GWL_STYLE, dw_style | WS_OVERLAPPEDWINDOW);
+        SetWindowPlacement(window, &g_wpPrev);
+        SetWindowPos(window, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+    }
+}
+
 void
 win32_process_keyboard_message(GameButtonState *new_state, bool32 is_down) {
     if (new_state->ended_down != is_down) {
@@ -28,17 +52,21 @@ win32_process_keyboard_message(GameButtonState *new_state, bool32 is_down) {
 }
 
 void 
-win32_process_pending_messages(Win32State win32_state, GameControllerInput keyboard_controller) {
+win32_process_pending_messages(Win32State *win32_state, GameControllerInput *keyboard_controller) {
     MSG message = {};
-
+    
     while (PeekMessage(&message, 0, 0, 0, PM_REMOVE)) {
+        
         switch (message.message) {
             case WM_QUIT: {
                 GLOBAL_RUNNING = false;
                 break;
             }
-            case WM_SYSKEYDOWN | WM_SYSKEYUP | WM_KEYDOWN | WM_KEYUP: {
-                WPARAM vk_code = message.wParam;
+            case WM_SYSKEYDOWN:
+            case WM_SYSKEYUP:
+            case WM_KEYDOWN:
+            case WM_KEYUP: {
+                WPARAM vk_code = (u16)message.wParam;
                 bool32 was_down = (message.lParam & (1 << 30)) != 0;
                 bool32 is_down = (message.lParam & (1 << 31)) == 0;
                 bool32 alt_key_was_down = (message.lParam & (1 << 29)) != 0;
@@ -46,31 +74,39 @@ win32_process_pending_messages(Win32State win32_state, GameControllerInput keybo
                 if (was_down != is_down) {
                     switch (vk_code) {
                         case 'W': {
+                            fprintf(stderr, "W");
                             win32_process_keyboard_message(
-                                &keyboard_controller.concrete_buttons.move_up,
+                                &keyboard_controller->concrete_buttons.move_up,
                                 is_down
                             );
                             break;
                         }
                         case 'A': {
                             win32_process_keyboard_message(
-                                &keyboard_controller.concrete_buttons.move_left,
+                                &keyboard_controller->concrete_buttons.move_left,
                                 is_down
                             );
                             break;
                         }
                         case 'S': {
                             win32_process_keyboard_message(
-                                &keyboard_controller.concrete_buttons.move_down,
+                                &keyboard_controller->concrete_buttons.move_down,
                                 is_down
                             );
                             break;
                         }
                         case 'D': {
                             win32_process_keyboard_message(
-                                &keyboard_controller.concrete_buttons.move_down,
+                                &keyboard_controller->concrete_buttons.move_down,
                                 is_down
                             );
+                            break;
+                        }
+                        case VK_RETURN: {
+                            OutputDebugString(L"ENTER");
+                            if (is_down && alt_key_was_down) {
+                                toggle_fullscreen(message.hwnd);
+                            }
                             break;
                         }
                         case VK_F4: {
@@ -285,7 +321,18 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
 
             GLOBAL_RUNNING = true;
 
+            GameInput input[2] = {};
+            GameInput *new_input = &input[0];
+            GameInput *old_input = &input[1];
+
+            i32 xoffset = 0;
+            i32 yoffset = 0;
             while (GLOBAL_RUNNING) {
+
+                GameControllerInput *old_keyboard_controller = get_controller(old_input, 0);
+                GameControllerInput *new_keyboard_controller = get_controller(new_input, 0);
+                memory_zero(new_keyboard_controller, sizeof(GameControllerInput));
+                new_keyboard_controller->is_connected = true; 
 
                 GameOffscreenBuffer buffer = {
                     .width = GLOBAL_BACKBUFFER.width,
@@ -295,8 +342,6 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
                     .bytes_per_pixel = GLOBAL_BACKBUFFER.bytes_per_pixel,
                 };
 
-                i32 xoffset = 0;
-                i32 yoffset = 0;
                 render_gradient(&buffer, xoffset, yoffset);
 
                 HDC device_context = GetDC(window);
@@ -306,9 +351,10 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
 
                 ReleaseDC(window, device_context);
 
-                ++xoffset;
-                yoffset += 2;
-                // win32_process_pending_messages(win32_state, new_keyboard_controller);
+                xoffset -= 1;
+                yoffset -= 1;
+
+                win32_process_pending_messages(&win32_state, new_keyboard_controller);
             }
         }
         else {

@@ -23,7 +23,7 @@ struct Win32WindowDimension {
 };
 
 typedef struct Win32GameCode Win32GameCode;
-typedef struct Win32GameCode {
+struct Win32GameCode {
     HMODULE game_code_dll;
     FILETIME dll_last_write_time;
     GameGetSoundSample get_sound_samples;
