@@ -1,8 +1,26 @@
 #include "void.h"
 
+// Replay
+typedef struct Win32ReplayBuffer Win32ReplayBuffer;
+struct Win32ReplayBuffer {
+    char *replay_file_name;
+    void *memory_block;
+};
+
 typedef struct Win32State Win32State;
 struct Win32State {
+    u64 total_size;
+    void *game_memory_block;
+    Win32ReplayBuffer replay_buffers[4]; 
 
+    HANDLE recording_handle;
+    u64 input_recording_index;
+
+    HANDLE playback_handle;
+    u64 input_playing_index;
+
+    char *exe_full_path;
+    char *exe_name;
 };
 
 typedef struct Win32OffscreenBuffer Win32OffscreenBuffer;

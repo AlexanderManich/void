@@ -1,9 +1,10 @@
 #define UNICODE
 #define _UNICODE
 
+#include <stdio.h>
 #include <windows.h>
 #include "win32_platform.h"
-#include <stdio.h>
+#include <intrin.h>
 
 bool32 GLOBAL_RUNNING = true;
 Win32OffscreenBuffer GLOBAL_BACKBUFFER = {};
@@ -320,49 +321,113 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
             //     / 3.0) as u32;
 
             GLOBAL_RUNNING = true;
+            
+            #if INTERNAL
+            void *base_address = (void *)TB(2);
+            #else
+            void *base_address = 0;
+            #endif //INTERNAL
+            
+            GameMemory game_memory = {
+                .is_initialized = false,
+                .permanent_storage_size = MB(64),
+                .permanent_storage = 0,
+                .transient_storage_size = GB(1),
+                .transient_storage = 0,
+            };
 
-            GameInput input[2] = {};
-            GameInput *new_input = &input[0];
-            GameInput *old_input = &input[1];
+            win32_state.total_size = game_memory.permanent_storage_size + game_memory.transient_storage_size;
+            win32_state.game_memory_block = VirtualAlloc(
+                base_address,
+                win32_state.total_size,
+                MEM_RESERVE | MEM_COMMIT,
+                PAGE_READWRITE
+            );
 
-            i32 xoffset = 0;
-            i32 yoffset = 0;
-            while (GLOBAL_RUNNING) {
+            game_memory.permanent_storage = win32_state.game_memory_block;
+            game_memory.transient_storage = ((u8 *)game_memory.permanent_storage + game_memory.permanent_storage_size);
+            for (u64 i = 0; i < array_count(win32_state.replay_buffers); i++) {
+                Win32ReplayBuffer replay_buffer = win32_state.replay_buffers[i];
+                replay_buffer.memory_block = VirtualAlloc(
+                    0,
+                    win32_state.total_size,
+                    MEM_RESERVE | MEM_COMMIT,
+                    PAGE_READWRITE
+                );
 
-                GameControllerInput *old_keyboard_controller = get_controller(old_input, 0);
-                GameControllerInput *new_keyboard_controller = get_controller(new_input, 0);
-                memory_zero(new_keyboard_controller, sizeof(GameControllerInput));
-                new_keyboard_controller->is_connected = true; 
+                assert(replay_buffer.memory_block);
+            }
 
-                GameOffscreenBuffer buffer = {
-                    .width = GLOBAL_BACKBUFFER.width,
-                    .height = GLOBAL_BACKBUFFER.height,
-                    .memory = GLOBAL_BACKBUFFER.memory,
-                    .pitch = GLOBAL_BACKBUFFER.pitch,
-                    .bytes_per_pixel = GLOBAL_BACKBUFFER.bytes_per_pixel,
-                };
+            if (game_memory.permanent_storage && game_memory.transient_storage) {
 
-                render_gradient(&buffer, xoffset, yoffset);
+                GameInput input[2] = {};
+                GameInput *new_input = &input[0];
+                GameInput *old_input = &input[1];
+                
+                // i64 last_counter = win32_get_wall_clock();
+                // i64 flip_wall_clock = win32_get_wall_clock();
+               
+                u64 debug_time_marker_index = 0;
+                // Win32DebugTimeMarker debug_time_markers[30];
+                
+                bool32 sound_is_valid = false;
+                i32 audio_latency_bytes = 0;
+                f32 autio_latency_seconds = 0.0;
 
-                HDC device_context = GetDC(window);
+                u64 last_cycle_count = _rdtsc();
 
-                Win32WindowDimension dim = win32_get_window_dimension(window);
-                win32_display_buffer_in_window(device_context, &GLOBAL_BACKBUFFER, dim.height, dim.width);
+                // Win32GameCode game = win32_load_game_code(
+                //     source_game_code_dll_full_path,
+                //     temp_game_code_dll_full_path
+                // )
 
-                ReleaseDC(window, device_context);
 
-                xoffset -= 1;
-                yoffset -= 1;
+                i32 xoffset = 0;
+                i32 yoffset = 0;
+                while (GLOBAL_RUNNING) {
+                    new_input->dt_for_frame = target_seconds_per_frame;
 
-                win32_process_pending_messages(&win32_state, new_keyboard_controller);
+                    FILETIME new_dll_write_time = {};
+                    // FILETIME last_write_time = win32_get_last_write_time(source_game_code_dll_full_path);
+                    // if (last_write_time) {
+                    //     new_dll_write_time = last_write_time;
+                    // }
+
+                    GameControllerInput *old_keyboard_controller = get_controller(old_input, 0);
+                    GameControllerInput *new_keyboard_controller = get_controller(new_input, 0);
+                    memory_zero(new_keyboard_controller, sizeof(GameControllerInput));
+                    new_keyboard_controller->is_connected = true; 
+                    
+                    GameOffscreenBuffer buffer = {
+                        .width = GLOBAL_BACKBUFFER.width,
+                        .height = GLOBAL_BACKBUFFER.height,
+                        .memory = GLOBAL_BACKBUFFER.memory,
+                        .pitch = GLOBAL_BACKBUFFER.pitch,
+                        .bytes_per_pixel = GLOBAL_BACKBUFFER.bytes_per_pixel,
+                    };
+                    
+                    render_gradient(&buffer, xoffset, yoffset);
+                    
+                    HDC device_context = GetDC(window);
+                    
+                    Win32WindowDimension dim = win32_get_window_dimension(window);
+                    win32_display_buffer_in_window(device_context, &GLOBAL_BACKBUFFER, dim.height, dim.width);
+                    
+                    ReleaseDC(window, device_context);
+                    
+                    xoffset -= 1;
+                    yoffset -= 1;
+                    
+                    win32_process_pending_messages(&win32_state, new_keyboard_controller);
+                }
+            }
+            else {
+                // Samples, Game Memory
             }
         }
         else {
-
+            // Window
         }
-    }
-    else {
-
     }
 
     return 0;

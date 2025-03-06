@@ -8,6 +8,7 @@
         "*.css.liquid": "liquid-css",
         "*.scss.liquid": "liquid-scss",
         "*.cpp": "c",
-        "win32_platform.h": "c"
+        "win32_platform.h": "c",
+        "void.h": "c"
     },
 }

@@ -1,5 +1,9 @@
 #include <stdint.h>
 
+#if SLOW
+#define assert(expr) if (!(expr)) {*(int *)0 = 0;}
+#endif // SLOW
+
 typedef int8_t   i8;
 typedef int16_t  i16;
 typedef int32_t  i32;
@@ -15,7 +19,13 @@ typedef int32_t bool32;
 #define false 0
 #define true 1
 
+#define KB(n) ((n) * 1024LL)
+#define MB(n) ((KB(n)) * 1024LL)
+#define GB(n) ((MB(n)) * 1024LL)
+#define TB(n) ((GB(n)) * 1024LL)
+
 #define memory_zero(s, n) (memset(s, 0, n))
+#define array_count(arr) ((sizeof(arr)) / (sizeof((arr[0]))))
 
 // Game Input
 typedef struct GameButtonState GameButtonState;
