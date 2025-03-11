@@ -62,7 +62,7 @@ struct ThreadContext {
 };
 
 typedef String8 (*DebugPlatformReadEntireFile)(ThreadContext *thread, String8 file_name); 
-typedef void (*DebugPlatformWriteEntireFile)(ThreadContext *thread, String8 file_name, u32 memory_size, void *memory); 
+typedef void (*DebugPlatformWriteEntireFile)(ThreadContext *thread, String8 file_name, void *memory, u32 memory_size); 
 typedef void (*DebugPlatformFreeFileMemory)(ThreadContext *thread, void *memory); 
 
 typedef struct GameMemory GameMemory;

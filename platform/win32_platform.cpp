@@ -5,6 +5,7 @@
 #include "dsound.h"
 
 b32 GLOBAL_RUNNING = true;
+b32 GLOBAL_PAUSE = false;
 Win32OffscreenBuffer GLOBAL_BACKBUFFER;
 LPDIRECTSOUNDBUFFER GLOBAL_SECONDARY_BUFFER;
 
@@ -110,25 +111,36 @@ win32_clear_sound_buffer(Win32SoundOutput *sound_output) {
     GLOBAL_SECONDARY_BUFFER->Unlock(region1, region1_size, region2, region2_size);
 }
 
-FILETIME win32_get_last_write_time(char *file_name) {
+FILETIME win32_get_last_write_time(String8 file_name) {
     WIN32_FILE_ATTRIBUTE_DATA data = {};
-    GetFileAttributesEx((LPCWSTR)file_name, GetFileExInfoStandard, &data);
+    GetFileAttributesEx((LPCWSTR)file_name.str, GetFileExInfoStandard, &data);
     FILETIME last_write_time = data.ftLastWriteTime;
     return last_write_time;
 }
 
-Win32GameCode win32_load_game_code(char *source_dll_name, char *temp_dll_name) {
+Win32GameCode win32_load_game_code(String8 source_dll_name, String8 temp_dll_name) {
     Win32GameCode result = {};
 
     result.dll_last_write_time = win32_get_last_write_time(source_dll_name);
-    CopyFile((LPCWSTR)source_dll_name, (LPCWSTR)temp_dll_name, false);
-    result.game_code_dll = LoadLibrary((LPCWSTR)temp_dll_name);
+    CopyFile((LPCWSTR)source_dll_name.str, (LPCWSTR)temp_dll_name.str, false);
+    result.game_code_dll = LoadLibrary((LPCWSTR)temp_dll_name.str);
 
     if (result.game_code_dll) {
         result.update_and_render = (GameUpdateAndRender *)GetProcAddress(result.game_code_dll, "game_update_and_render");
         result.get_sound_samples = (GameGetSoundSamples *)GetProcAddress(result.game_code_dll, "game_get_sound_samples");
         result.is_valid = (result.update_and_render && result.get_sound_samples);
     }
+}
+
+void
+win32_unload_game_code(Win32GameCode *game_code) {
+    if (game_code->game_code_dll) {
+        FreeLibrary(game_code->game_code_dll);
+    }
+
+    game_code->game_code_dll = 0;
+    game_code->get_sound_samples = 0;
+    game_code->update_and_render = 0;
 }
 
 void
@@ -166,6 +178,23 @@ debug_platform_read_entire_file(ThreadContext *thread, String8 file_name) {
     CloseHandle(file_handle);
 
     return result;
+}
+
+void
+debug_platform_write_entire_file(ThreadContext *thread, String8 file_name, void *memory, u32 memory_size) {
+    HANDLE file_handle = CreateFileA((char *)file_name.str, GENERIC_WRITE, FILE_SHARE_WRITE, 0, CREATE_ALWAYS, 0, 0);
+
+    u8 *write_buffer = (u8 *)memory;
+
+    DWORD bytes_written;
+    if(WriteFile(file_handle, write_buffer, memory_size, &bytes_written, 0)) {
+        assert(bytes_written == memory_size);
+    }
+    else {
+
+    }
+    
+    CloseHandle(file_handle);
 }
 
 void
@@ -492,9 +521,6 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
             #else
             void *base_address = 0;
             #endif //INTERNAL
-            
-            ThreadContext thread = {}; 
-            String8 file = debug_platform_read_entire_file(&thread, str8_lit("win32_platform.cpp"));
 
             GameMemory game_memory = {};
             game_memory.is_initialized = false;
@@ -502,9 +528,9 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
             game_memory.permanent_storage = 0;
             game_memory.transient_storage_size = GB(1);
             game_memory.transient_storage = 0;
-            game_memory.debug_platform_read_entire_file;
-            game_memory.debug_platform_write_entire_file;
-            game_memory.debug_platform_free_file_memory;
+            game_memory.debug_platform_read_entire_file = debug_platform_read_entire_file;
+            game_memory.debug_platform_write_entire_file = debug_platform_write_entire_file;
+            game_memory.debug_platform_free_file_memory = debug_platform_free_file_memory;
 
             win32_state.total_size = game_memory.permanent_storage_size + game_memory.transient_storage_size;
             win32_state.game_memory_block = VirtualAlloc(
@@ -528,7 +554,7 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
                 assert(replay_buffer.memory_block);
             }
 
-            if (game_memory.permanent_storage && game_memory.transient_storage) {
+            if (samples && game_memory.permanent_storage && game_memory.transient_storage) {
 
                 GameInput input[2] = {};
                 GameInput *new_input = &input[0];
@@ -551,16 +577,16 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
                 //     temp_game_code_dll_full_path
                 // );
 
-
-                i32 xoffset = 0;
-                i32 yoffset = 0;
                 while (GLOBAL_RUNNING) {
                     new_input->dt_for_frame = target_seconds_per_frame;
 
                     FILETIME new_dll_write_time = {};
-                    // FILETIME last_write_time = win32_get_last_write_time(source_game_code_dll_full_path);
-                    // if (last_write_time) {
-                    //     new_dll_write_time = last_write_time;
+                    FILETIME last_write_time = win32_get_last_write_time(source_game_code_dll_full_path);
+                    new_dll_write_time = last_write_time;
+
+                    // if (CompareFileTime(&new_dll_write_time, &game.dll_last_write_time) != 0) {
+                    //     win32_unload_game_code(&game);
+                    //     game = win32_load_game_code(source_game_code_dll_full_path, temp_game_code_dll_full_path);
                     // }
 
                     GameControllerInput *old_keyboard_controller = get_controller(old_input, 0);
@@ -568,27 +594,50 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
                     memory_zero(new_keyboard_controller, sizeof(GameControllerInput));
                     new_keyboard_controller->is_connected = true; 
                     
-                    GameOffscreenBuffer buffer = {
-                        .width = GLOBAL_BACKBUFFER.width,
-                        .height = GLOBAL_BACKBUFFER.height,
-                        .memory = GLOBAL_BACKBUFFER.memory,
-                        .pitch = GLOBAL_BACKBUFFER.pitch,
-                        .bytes_per_pixel = GLOBAL_BACKBUFFER.bytes_per_pixel,
-                    };
-                    
-                    render_gradient(&buffer, xoffset, yoffset);
-                    
-                    HDC device_context = GetDC(window);
-                    
-                    Win32WindowDimension dim = win32_get_window_dimension(window);
-                    win32_display_buffer_in_window(device_context, &GLOBAL_BACKBUFFER, dim.height, dim.width);
-                    
-                    ReleaseDC(window, device_context);
-                    
-                    xoffset -= 1;
-                    yoffset -= 1;
-                    
+                    for (u64 button_index = 0; button_index < array_count(new_keyboard_controller->buttons); button_index++) {
+                        new_keyboard_controller->buttons[button_index].ended_down =
+                        old_keyboard_controller->buttons[button_index].ended_down;
+                    }
+
                     win32_process_pending_messages(&win32_state, new_keyboard_controller);
+
+                    if (!GLOBAL_PAUSE) {
+                        // Mouse input
+                        POINT mouse_p = {};
+                        GetCursorPos(&mouse_p);
+                        
+                        ScreenToClient(window, &mouse_p);
+                        new_input->mouse_x = mouse_p.x;
+                        new_input->mouse_y = mouse_p.y;
+                        new_input->mouse_z = 0;
+                        
+                        for (u64 i = 0; i < array_count(new_input->mouse_buttons); i++) { 
+                            win32_process_keyboard_message(
+                                &new_input->mouse_buttons[i],
+                                (GetKeyState(VK_LBUTTON) & (1 << 15)) != 0
+                            );
+                        }
+
+                        GameOffscreenBuffer buffer = {
+                            .width = GLOBAL_BACKBUFFER.width,
+                            .height = GLOBAL_BACKBUFFER.height,
+                            .memory = GLOBAL_BACKBUFFER.memory,
+                            .pitch = GLOBAL_BACKBUFFER.pitch,
+                            .bytes_per_pixel = GLOBAL_BACKBUFFER.bytes_per_pixel,
+                        };
+
+                        // if (win32_state.input_recording_index == 1) {
+
+                        // }
+                        
+                        HDC device_context = GetDC(window);
+                        
+                        Win32WindowDimension dim = win32_get_window_dimension(window);
+                        win32_display_buffer_in_window(device_context, &GLOBAL_BACKBUFFER, dim.height, dim.width);
+                        
+                        ReleaseDC(window, device_context);
+                        
+                    }
                 }
             }
             else {
