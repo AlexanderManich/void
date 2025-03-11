@@ -1,4 +1,25 @@
+#ifndef WIN32_PLATFORM_H
+#define WIN32_PLATFORM_H
+
+#include <stdio.h>
+#include <windows.h>
+#include <intrin.h>
 #include "void.h"
+#include "lib_base.h"
+#include "lib_string.h"
+#include "lib_arena.h"
+
+typedef struct Win32DebugTimeMarker Win32DebugTimeMarker;
+struct Win32DebugTimeMarker {
+    u32 output_play_cursor;
+    u32 output_write_cursor;
+    u32 output_location;
+    u32 output_byte_count;
+    u32 expected_flip_play_cursor;
+    
+    u32 flip_play_cursor;
+    u32 flip_write_cursor;
+};
 
 // Replay
 typedef struct Win32ReplayBuffer Win32ReplayBuffer;
@@ -19,8 +40,8 @@ struct Win32State {
     HANDLE playback_handle;
     u64 input_playing_index;
 
-    char *exe_full_path;
-    char *exe_name;
+    String8 exe_dir_path;
+    String8 exe_name;
 };
 
 typedef struct Win32OffscreenBuffer Win32OffscreenBuffer;
@@ -44,8 +65,9 @@ typedef struct Win32GameCode Win32GameCode;
 struct Win32GameCode {
     HMODULE game_code_dll;
     FILETIME dll_last_write_time;
-    GameGetSoundSample get_sound_samples;
-    GameUpdateAndRender update_and_render;
+    GameGetSoundSamples *get_sound_samples;
+    GameUpdateAndRender *update_and_render;
+    b32 is_valid;
 };
 
 // Sound
@@ -58,3 +80,5 @@ struct Win32SoundOutput {
     u32 latency_sample_count;
     u32 safety_bytes;
 };
+
+#endif // WIN32_PLATFORM_H

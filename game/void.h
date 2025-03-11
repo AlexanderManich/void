@@ -1,37 +1,14 @@
-#include <stdint.h>
+#ifndef VOID_H 
+#define VOID_H
 
-#if SLOW
-#define assert(expr) if (!(expr)) {*(int *)0 = 0;}
-#endif // SLOW
-
-typedef int8_t   i8;
-typedef int16_t  i16;
-typedef int32_t  i32;
-typedef int64_t  i64;
-typedef uint8_t  u8;
-typedef uint16_t u16;
-typedef uint32_t u32;
-typedef uint64_t u64;
-typedef float    f32;
-typedef double   f64;
-
-typedef int32_t bool32;
-#define false 0
-#define true 1
-
-#define KB(n) ((n) * 1024LL)
-#define MB(n) ((KB(n)) * 1024LL)
-#define GB(n) ((MB(n)) * 1024LL)
-#define TB(n) ((GB(n)) * 1024LL)
-
-#define memory_zero(s, n) (memset(s, 0, n))
-#define array_count(arr) ((sizeof(arr)) / (sizeof((arr[0]))))
+#include "lib_base.h"
+#include "lib_string.h"
 
 // Game Input
 typedef struct GameButtonState GameButtonState;
 struct GameButtonState {
     i32 half_transition_count;
-    bool32 ended_down;
+    b32 ended_down;
 };
 
 typedef struct ConcreteGameButtonState ConcreteGameButtonState;
@@ -55,8 +32,8 @@ struct ConcreteGameButtonState {
 
 typedef struct GameControllerInput GameControllerInput;
 struct GameControllerInput {
-    bool32 is_analog;
-    bool32 is_connected;
+    b32 is_analog;
+    b32 is_connected;
     
     f32 stick_average_x;
     f32 stick_average_y;
@@ -84,9 +61,13 @@ struct ThreadContext {
     i32 placeholder;
 };
 
+typedef String8 (*DebugPlatformReadEntireFile)(ThreadContext *thread, String8 file_name); 
+typedef void (*DebugPlatformWriteEntireFile)(ThreadContext *thread, String8 file_name, u32 memory_size, void *memory); 
+typedef void (*DebugPlatformFreeFileMemory)(ThreadContext *thread, void *memory); 
+
 typedef struct GameMemory GameMemory;
 struct GameMemory {
-    bool32 is_initialized;
+    b32 is_initialized;
 
     u64 permanent_storage_size;
     void *permanent_storage; // Required to be cleared to zero at startup
@@ -94,9 +75,9 @@ struct GameMemory {
     u64 transient_storage_size;
     void *transient_storage; // Required to be cleared to zero at startup
 
-    // debug_platform_read_entire_file: DebugPlatformReadEntireFile,
-    // debug_platform_free_file_memory: DebugPlatformFreeFileMemory,
-    // debug_platform_write_entire_file: DebugPlatformWriteEntireFile,
+    DebugPlatformReadEntireFile debug_platform_read_entire_file;
+    DebugPlatformFreeFileMemory debug_platform_free_file_memory;
+    DebugPlatformWriteEntireFile debug_platform_write_entire_file;
 };
 
 
@@ -116,9 +97,11 @@ struct GameOffscreenBuffer {
     i32 bytes_per_pixel;
 };
 
-typedef void (*GameGetSoundSample)(ThreadContext *thread, GameMemory *memory, GameSoundOutputBuffer *sound_buffer);
+typedef void (*GameGetSoundSamples)(ThreadContext *thread, GameMemory *memory, GameSoundOutputBuffer *sound_buffer);
 typedef void (*GameUpdateAndRender)(ThreadContext *thread, GameOffscreenBuffer *buffer, GameInput* input, GameMemory* memory);
 
 void render_gradient(GameOffscreenBuffer *buffer, i32 blue_offset, i32 green_offset);
 
 GameControllerInput *get_controller(GameInput *input, u64 controller_index);
+
+#endif // VOID_H

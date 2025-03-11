@@ -1,13 +1,12 @@
 #define UNICODE
 #define _UNICODE
 
-#include <stdio.h>
-#include <windows.h>
 #include "win32_platform.h"
-#include <intrin.h>
+#include "dsound.h"
 
-bool32 GLOBAL_RUNNING = true;
-Win32OffscreenBuffer GLOBAL_BACKBUFFER = {};
+b32 GLOBAL_RUNNING = true;
+Win32OffscreenBuffer GLOBAL_BACKBUFFER;
+LPDIRECTSOUNDBUFFER GLOBAL_SECONDARY_BUFFER;
 
 Win32WindowDimension
 win32_get_window_dimension(HWND window) {
@@ -23,11 +22,9 @@ win32_get_window_dimension(HWND window) {
 
 WINDOWPLACEMENT g_wpPrev = { sizeof(g_wpPrev) };
 void toggle_fullscreen(HWND window) {
-
-
     i32 dw_style = GetWindowLongW(window, GWL_STYLE);
     if (dw_style & WS_OVERLAPPEDWINDOW) {
-        MONITORINFO mi = { sizeof(mi) };
+        MONITORINFO mi = { sizeof(mi)};
         if (GetWindowPlacement(window, &g_wpPrev) && GetMonitorInfo(MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY), &mi)) {
             SetWindowLong(window, GWL_STYLE, dw_style & ~WS_OVERLAPPEDWINDOW);
             SetWindowPos(window, HWND_TOP,
@@ -44,14 +41,159 @@ void toggle_fullscreen(HWND window) {
     }
 }
 
+#define DIRECT_SOUND_CREATE(name) HRESULT WINAPI name(LPCGUID pcGuidDevice, LPDIRECTSOUND *ppDS, LPUNKNOWN pUnkOuter)
+typedef DIRECT_SOUND_CREATE(direct_sound_create);
+
 void
-win32_process_keyboard_message(GameButtonState *new_state, bool32 is_down) {
+win32_init_d_sound(HWND window, i32 samples_per_second, u32 buffer_size) {
+    HMODULE d_sound_lib = LoadLibraryA("dsound.dll");
+    if (d_sound_lib) {
+        direct_sound_create *DirectSoundCreate = (direct_sound_create *)GetProcAddress(d_sound_lib, "DirectSoundCreate");
+
+        LPDIRECTSOUND direct_sound;
+        if (DirectSoundCreate && SUCCEEDED(DirectSoundCreate(0, &direct_sound, 0))) {
+            WAVEFORMATEX wave_format = {};
+            wave_format.wFormatTag = WAVE_FORMAT_PCM;
+            wave_format.nChannels = 2;
+            wave_format.nSamplesPerSec = samples_per_second;
+            wave_format.wBitsPerSample = 16; 
+            wave_format.nBlockAlign = (wave_format.nChannels * wave_format.wBitsPerSample) / 8;
+            wave_format.nAvgBytesPerSec = wave_format.nBlockAlign * wave_format.nSamplesPerSec;
+            wave_format.cbSize = 0;
+
+            if (SUCCEEDED(direct_sound->SetCooperativeLevel(window, DSSCL_PRIORITY))) {
+                DSBUFFERDESC buffer_description = {};
+                buffer_description.dwSize = sizeof(buffer_description);
+                buffer_description.dwFlags = DSBCAPS_PRIMARYBUFFER;
+                
+                LPDIRECTSOUNDBUFFER primary_buffer;
+
+                if (SUCCEEDED(direct_sound->CreateSoundBuffer(&buffer_description, &primary_buffer, 0))) {
+                    if (SUCCEEDED(primary_buffer->SetFormat(&wave_format))) {
+
+                        DSBUFFERDESC buffer_description = {};
+                        buffer_description.dwSize = sizeof(buffer_description);
+                        buffer_description.dwFlags = DSBCAPS_GETCURRENTPOSITION2;
+                        buffer_description.dwBufferBytes = buffer_size;
+                        buffer_description.lpwfxFormat = &wave_format;
+
+                        if (SUCCEEDED(direct_sound->CreateSoundBuffer(&buffer_description, &GLOBAL_SECONDARY_BUFFER, 0))) {
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+void
+win32_clear_sound_buffer(Win32SoundOutput *sound_output) {
+    void *region1;
+    DWORD region1_size = 0;
+    void *region2;
+    DWORD region2_size = 0;
+
+    GLOBAL_SECONDARY_BUFFER->Lock(0, sound_output->secondary_buffer_size, &region1, &region1_size, &region2, &region2_size, 0);
+    
+    u8 *dest_sample = (u8 *)region1;
+    for (u64 i = 0; i < region1_size; i++) {
+        *dest_sample = 0;
+        dest_sample += 1;
+    }
+
+    dest_sample = (u8 *)region2;
+    for (u64 i = 0; i < region2_size; i++) {
+        *dest_sample = 0;
+        dest_sample += 1;
+    }
+
+    GLOBAL_SECONDARY_BUFFER->Unlock(region1, region1_size, region2, region2_size);
+}
+
+FILETIME win32_get_last_write_time(char *file_name) {
+    WIN32_FILE_ATTRIBUTE_DATA data = {};
+    GetFileAttributesEx((LPCWSTR)file_name, GetFileExInfoStandard, &data);
+    FILETIME last_write_time = data.ftLastWriteTime;
+    return last_write_time;
+}
+
+Win32GameCode win32_load_game_code(char *source_dll_name, char *temp_dll_name) {
+    Win32GameCode result = {};
+
+    result.dll_last_write_time = win32_get_last_write_time(source_dll_name);
+    CopyFile((LPCWSTR)source_dll_name, (LPCWSTR)temp_dll_name, false);
+    result.game_code_dll = LoadLibrary((LPCWSTR)temp_dll_name);
+
+    if (result.game_code_dll) {
+        result.update_and_render = (GameUpdateAndRender *)GetProcAddress(result.game_code_dll, "game_update_and_render");
+        result.get_sound_samples = (GameGetSoundSamples *)GetProcAddress(result.game_code_dll, "game_get_sound_samples");
+        result.is_valid = (result.update_and_render && result.get_sound_samples);
+    }
+}
+
+void
+debug_platform_free_file_memory(ThreadContext *thread, void *memory) {
+    if (memory) {
+        VirtualFree(memory, 0, MEM_RELEASE);
+    }
+}
+
+String8
+debug_platform_read_entire_file(ThreadContext *thread, String8 file_name) {
+    String8 result = {};
+
+    HANDLE file_handle = CreateFileA((char *)file_name.str, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, 0, 0);
+
+    LARGE_INTEGER file_size = {};
+    GetFileSizeEx(file_handle, &file_size);
+    u32 file_size_u32 = safe_u64_to_u32(file_size.QuadPart);
+
+    result.str = (u8 *)VirtualAlloc(0, file_size_u32, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+
+    u8 *read_buffer = result.str;
+
+    if (result.str) {
+        DWORD bytes_read = 0;
+        if (ReadFile(file_handle, read_buffer, file_size_u32, &bytes_read, 0)) {
+            assert(bytes_read == file_size_u32);
+            result.size = file_size_u32;
+        }
+        else {
+            debug_platform_free_file_memory(thread, result.str);
+            result.str = 0;
+        }
+    }
+    CloseHandle(file_handle);
+
+    return result;
+}
+
+void
+win32_process_keyboard_message(GameButtonState *new_state, b32 is_down) {
     if (new_state->ended_down != is_down) {
         new_state->ended_down = is_down;
         new_state->half_transition_count += 1;
     }
 }
 
+LARGE_INTEGER win32_get_wall_clock() {
+    LARGE_INTEGER result = {};
+    QueryPerformanceCounter(&result);
+    return result;
+}
+
+void
+win32_get_exe_file_name(Arena *arena, Win32State *state) {
+    u32 size = KB(32);
+    u8 *buffer = push_array(arena, u8, size);
+    u32 length = GetModuleFileNameA(0, (char *)buffer, size);
+    String8 string = str8(buffer, length);
+    
+    state->exe_name = str8_last_slash_suffix(string);
+    state->exe_dir_path = str8_last_slash_prefix(string);
+}
+
+// win32_build_exe_path_file_name(Win32State *state, )
 void 
 win32_process_pending_messages(Win32State *win32_state, GameControllerInput *keyboard_controller) {
     MSG message = {};
@@ -68,9 +210,9 @@ win32_process_pending_messages(Win32State *win32_state, GameControllerInput *key
             case WM_KEYDOWN:
             case WM_KEYUP: {
                 WPARAM vk_code = (u16)message.wParam;
-                bool32 was_down = (message.lParam & (1 << 30)) != 0;
-                bool32 is_down = (message.lParam & (1 << 31)) == 0;
-                bool32 alt_key_was_down = (message.lParam & (1 << 29)) != 0;
+                b32 was_down = (message.lParam & (1 << 30)) != 0;
+                b32 is_down = (message.lParam & (1 << 31)) == 0;
+                b32 alt_key_was_down = (message.lParam & (1 << 29)) != 0;
                 
                 if (was_down != is_down) {
                     switch (vk_code) {
@@ -269,7 +411,22 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
     (void)command_line;
     (void)show_code;
 
+    u64 global_arena_size = MB(1);
+    u8 global_arena_buffer[global_arena_size];
+    Arena global_arena = {};
+
+    arena_init(&global_arena, global_arena_buffer, global_arena_size);
+
     Win32State win32_state = {};
+
+    win32_get_exe_file_name(&global_arena, &win32_state);
+
+    String8 source_game_code_dll_full_path = str8_concat(&global_arena, win32_state.exe_dir_path, str8_lit("game.dll"));
+
+    String8 temp_game_code_dll_full_path = str8_concat(&global_arena, win32_state.exe_dir_path, str8_lit("temp_game.dll"));
+
+    i32 desired_scheduler_ms = 1;
+    b32 sleep_is_granular = timeBeginPeriod(desired_scheduler_ms) != TIMERR_NOERROR;
 
     WNDCLASS window_class = {};
 
@@ -315,26 +472,39 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
             sound_output.bytes_per_sample = sizeof(i16) * 2;
             sound_output.secondary_buffer_size =
                 sound_output.samples_per_second * sound_output.bytes_per_sample;
-            // sound_output.safety_bytes = ((sound_output.samples_per_second as f32
-            //     * sound_output.bytes_per_sample as f32
-            //     / game_update_hz)
-            //     / 3.0) as u32;
+            sound_output.safety_bytes = (u32)(((f32)sound_output.samples_per_second
+                * (f32)sound_output.bytes_per_sample
+                / game_update_hz)
+                / 3.0);
+
+            win32_init_d_sound(window, sound_output.samples_per_second, sound_output.secondary_buffer_size);
+
+            win32_clear_sound_buffer(&sound_output);
+
+            GLOBAL_SECONDARY_BUFFER->Play(0, 0, DSBPLAY_LOOPING);
 
             GLOBAL_RUNNING = true;
             
+            i16 *samples = (i16 *)VirtualAlloc(0, sound_output.secondary_buffer_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+
             #if INTERNAL
             void *base_address = (void *)TB(2);
             #else
             void *base_address = 0;
             #endif //INTERNAL
             
-            GameMemory game_memory = {
-                .is_initialized = false,
-                .permanent_storage_size = MB(64),
-                .permanent_storage = 0,
-                .transient_storage_size = GB(1),
-                .transient_storage = 0,
-            };
+            ThreadContext thread = {}; 
+            String8 file = debug_platform_read_entire_file(&thread, str8_lit("win32_platform.cpp"));
+
+            GameMemory game_memory = {};
+            game_memory.is_initialized = false;
+            game_memory.permanent_storage_size = MB(64);
+            game_memory.permanent_storage = 0;
+            game_memory.transient_storage_size = GB(1);
+            game_memory.transient_storage = 0;
+            game_memory.debug_platform_read_entire_file;
+            game_memory.debug_platform_write_entire_file;
+            game_memory.debug_platform_free_file_memory;
 
             win32_state.total_size = game_memory.permanent_storage_size + game_memory.transient_storage_size;
             win32_state.game_memory_block = VirtualAlloc(
@@ -364,13 +534,13 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
                 GameInput *new_input = &input[0];
                 GameInput *old_input = &input[1];
                 
-                // i64 last_counter = win32_get_wall_clock();
-                // i64 flip_wall_clock = win32_get_wall_clock();
+                LARGE_INTEGER last_counter = win32_get_wall_clock();
+                LARGE_INTEGER flip_wall_clock = win32_get_wall_clock();
                
                 u64 debug_time_marker_index = 0;
-                // Win32DebugTimeMarker debug_time_markers[30];
+                Win32DebugTimeMarker debug_time_markers[30];
                 
-                bool32 sound_is_valid = false;
+                b32 sound_is_valid = false;
                 i32 audio_latency_bytes = 0;
                 f32 autio_latency_seconds = 0.0;
 
@@ -379,7 +549,7 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
                 // Win32GameCode game = win32_load_game_code(
                 //     source_game_code_dll_full_path,
                 //     temp_game_code_dll_full_path
-                // )
+                // );
 
 
                 i32 xoffset = 0;
