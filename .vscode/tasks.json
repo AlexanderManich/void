@@ -10,9 +10,9 @@
                 "isDefault": true
             },
             "presentation": {
-                "reveal": "never",
-                "panel": "shared",
-            }
+                "focus": true,
+            },
+            "problemMatcher": []
         },
     ]
 }

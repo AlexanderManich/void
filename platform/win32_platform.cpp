@@ -6,6 +6,7 @@
 
 b32 GLOBAL_RUNNING = true;
 b32 GLOBAL_PAUSE = false;
+i64 PERF_COUNTER_FREQ;
 Win32OffscreenBuffer GLOBAL_BACKBUFFER;
 LPDIRECTSOUNDBUFFER GLOBAL_SECONDARY_BUFFER;
 
@@ -111,14 +112,16 @@ win32_clear_sound_buffer(Win32SoundOutput *sound_output) {
     GLOBAL_SECONDARY_BUFFER->Unlock(region1, region1_size, region2, region2_size);
 }
 
-FILETIME win32_get_last_write_time(String8 file_name) {
+FILETIME 
+win32_get_last_write_time(String8 file_name) {
     WIN32_FILE_ATTRIBUTE_DATA data = {};
     GetFileAttributesEx((LPCWSTR)file_name.str, GetFileExInfoStandard, &data);
     FILETIME last_write_time = data.ftLastWriteTime;
     return last_write_time;
 }
 
-Win32GameCode win32_load_game_code(String8 source_dll_name, String8 temp_dll_name) {
+Win32GameCode 
+win32_load_game_code(String8 source_dll_name, String8 temp_dll_name) {
     Win32GameCode result = {};
 
     result.dll_last_write_time = win32_get_last_write_time(source_dll_name);
@@ -130,6 +133,8 @@ Win32GameCode win32_load_game_code(String8 source_dll_name, String8 temp_dll_nam
         result.get_sound_samples = (GameGetSoundSamples *)GetProcAddress(result.game_code_dll, "game_get_sound_samples");
         result.is_valid = (result.update_and_render && result.get_sound_samples);
     }
+
+    return result;
 }
 
 void
@@ -205,9 +210,16 @@ win32_process_keyboard_message(GameButtonState *new_state, b32 is_down) {
     }
 }
 
-LARGE_INTEGER win32_get_wall_clock() {
+LARGE_INTEGER 
+win32_get_wall_clock() {
     LARGE_INTEGER result = {};
     QueryPerformanceCounter(&result);
+    return result;
+}
+
+f32
+win32_get_seconds_elapsed(i64 start, i64 end) {
+    f32 result = (f32)(end - start) / PERF_COUNTER_FREQ;
     return result;
 }
 
@@ -222,7 +234,6 @@ win32_get_exe_file_name(Arena *arena, Win32State *state) {
     state->exe_dir_path = str8_last_slash_prefix(string);
 }
 
-// win32_build_exe_path_file_name(Win32State *state, )
 void 
 win32_process_pending_messages(Win32State *win32_state, GameControllerInput *keyboard_controller) {
     MSG message = {};
@@ -246,7 +257,6 @@ win32_process_pending_messages(Win32State *win32_state, GameControllerInput *key
                 if (was_down != is_down) {
                     switch (vk_code) {
                         case 'W': {
-                            fprintf(stderr, "W");
                             win32_process_keyboard_message(
                                 &keyboard_controller->concrete_buttons.move_up,
                                 is_down
@@ -275,7 +285,6 @@ win32_process_pending_messages(Win32State *win32_state, GameControllerInput *key
                             break;
                         }
                         case VK_RETURN: {
-                            OutputDebugString(L"ENTER");
                             if (is_down && alt_key_was_down) {
                                 toggle_fullscreen(message.hwnd);
                             }
@@ -517,9 +526,9 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
             i16 *samples = (i16 *)VirtualAlloc(0, sound_output.secondary_buffer_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 
             #if INTERNAL
-            void *base_address = (void *)TB(2);
+                void *base_address = (void *)TB(2);
             #else
-            void *base_address = 0;
+                void *base_address = 0;
             #endif //INTERNAL
 
             GameMemory game_memory = {};
@@ -568,7 +577,7 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
                 
                 b32 sound_is_valid = false;
                 i32 audio_latency_bytes = 0;
-                f32 autio_latency_seconds = 0.0;
+                f32 audio_latency_seconds = 0.0;
 
                 u64 last_cycle_count = _rdtsc();
 
@@ -629,6 +638,99 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
                         // if (win32_state.input_recording_index == 1) {
 
                         // }
+                        
+                        ThreadContext thread = {};
+
+                        // if (game.update_and_render) {
+                        //     (*game.update_and_render)(&thread, &buffer, new_input, &game_memory);
+                        // }
+
+                        LARGE_INTEGER audio_wall_clock = win32_get_wall_clock();
+                        f32 from_begin_to_audio_seconds = win32_get_seconds_elapsed(flip_wall_clock.QuadPart, audio_wall_clock.QuadPart);
+
+                        DWORD play_cursor = 0;
+                        DWORD write_cursor = 0;
+
+                        if (GLOBAL_SECONDARY_BUFFER->GetCurrentPosition(&play_cursor, &write_cursor) != DS_OK) {
+                            sound_is_valid = false;
+                        }
+
+                        if (!sound_is_valid) {
+                            sound_output.running_sample_index = write_cursor / sound_output.bytes_per_sample;
+                            sound_is_valid = true;
+                        }
+
+                        u32 byte_to_lock = (sound_output.running_sample_index * sound_output.bytes_per_sample) 
+                        % sound_output.secondary_buffer_size;
+
+                        u32 expected_sound_bytes_per_frame = (u32)((f32)(sound_output.samples_per_second * sound_output.bytes_per_sample)
+                        / game_update_hz);
+
+                        f32 seconds_left_until_flip = target_seconds_per_frame - from_begin_to_audio_seconds;
+                        u32 expected_bytes_until_flip = (u32)((seconds_left_until_flip / target_seconds_per_frame)
+                        * (f32)expected_sound_bytes_per_frame);
+
+                        u32 expected_frame_boundary_byte = play_cursor + expected_bytes_until_flip;
+
+                        u32 safe_write_cursor = write_cursor;
+                        if (safe_write_cursor < play_cursor) {
+                            safe_write_cursor += sound_output.secondary_buffer_size;
+                        }
+
+                        assert(safe_write_cursor >= play_cursor);
+                        safe_write_cursor += sound_output.safety_bytes;
+
+                        b32 audio_card_is_low_latency = safe_write_cursor < expected_frame_boundary_byte;
+
+                        u32 target_cursor;
+                        if (audio_card_is_low_latency) {
+                            target_cursor = expected_frame_boundary_byte + expected_sound_bytes_per_frame;
+                        }
+                        else {
+                            target_cursor = write_cursor + expected_sound_bytes_per_frame + sound_output.safety_bytes;
+                        }
+
+                        target_cursor %= sound_output.secondary_buffer_size;
+
+                        u32 bytes_to_write;
+                        if (byte_to_lock > target_cursor) {
+                            bytes_to_write = sound_output.secondary_buffer_size - byte_to_lock + target_cursor;
+                        }
+                        else {
+                            bytes_to_write = target_cursor - byte_to_lock;
+                        }
+
+                        GameSoundOutputBuffer sound_buffer = {};
+                        sound_buffer.samples_per_second = sound_output.samples_per_second;
+                        sound_buffer.sample_count = bytes_to_write / sound_output.bytes_per_sample;
+                        sound_buffer.samples = samples;
+
+                        // if (game.get_sound_samples) {
+                        //     (*game.get_sound_samples)(&thread, &game_memory, &sound_buffer);
+                        // }
+
+                        #if INTERNAL 
+                        {
+                            Win32DebugTimeMarker marker = debug_time_markers[debug_time_marker_index];
+                            marker.output_play_cursor = play_cursor;
+                            marker.output_write_cursor = write_cursor;
+                            marker.output_location = byte_to_lock;
+                            marker.output_byte_count = bytes_to_write;
+                            marker.expected_flip_play_cursor = expected_frame_boundary_byte;
+                            
+                            u32 unwrapped_write_cursor = write_cursor;
+                            if (unwrapped_write_cursor < play_cursor) {
+                                unwrapped_write_cursor += sound_output.secondary_buffer_size;
+                            }
+                            audio_latency_bytes = unwrapped_write_cursor - play_cursor;
+                            audio_latency_seconds = ((f32)audio_latency_bytes
+                            / (f32)sound_output.bytes_per_sample
+                            / (f32)sound_output.samples_per_second);
+                            
+                            fprintf(stderr, "pc: {%d} wc: {%d} delta: {%d} {%d}",
+                                play_cursor, write_cursor, audio_latency_bytes, audio_latency_seconds);
+                        }
+                        #endif // INTERNAL 
                         
                         HDC device_context = GetDC(window);
                         

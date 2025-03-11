@@ -1,4 +1,4 @@
-#include "void.h"
+#include "game.h"
 
 void render_gradient(GameOffscreenBuffer *buffer, i32 blue_offset, i32 green_offset) {
     // Draw bitmap to window.

@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <windows.h>
 #include <intrin.h>
-#include "void.h"
+#include "game.h"
 #include "lib_base.h"
 #include "lib_string.h"
 #include "lib_arena.h"

@@ -2,7 +2,7 @@
 
 set CFLAGS=-Wall -Wextra -pedantic -g
 set INCLUDE=-Igame -Ilib
-set IMPL=platform\win32_platform.cpp game\void.cpp lib\lib_string.c lib\lib_arena.c lib\lib_base.c
+set IMPL=platform\win32_platform.cpp game\game.cpp lib\lib_string.c lib\lib_arena.c lib\lib_base.c
 set LIBS=-lgdi32 -lwinmm
 set DFLAGS=-DINTERNAL -DSLOW
 
