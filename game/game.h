@@ -1,33 +1,28 @@
-#ifndef VOID_H 
-#define VOID_H
+#ifndef GAME_H
+#define GAME_H
 
-#include "lib_base.h"
-#include "lib_string.h"
+
+
+typedef struct GameState GameState;
+struct GameState {
+    Arena world_arena;
+    // World arena;
+
+    // TileMapPosition camera_p;
+    // TileMapPosition player_p;
+    // Vec2 d_player_p;
+
+    // Loaded_Bitmap backdrop;
+
+    u64 hero_facing_direction;
+    // HeroBitMaps hero_bitmaps[6];
+};
 
 // Game Input
 typedef struct GameButtonState GameButtonState;
 struct GameButtonState {
     i32 half_transition_count;
     b32 ended_down;
-};
-
-typedef struct ConcreteGameButtonState ConcreteGameButtonState;
-struct ConcreteGameButtonState {
-    GameButtonState move_up;
-    GameButtonState move_down;
-    GameButtonState move_left;
-    GameButtonState move_right;
-
-    GameButtonState action_up;
-    GameButtonState action_down;
-    GameButtonState action_left;
-    GameButtonState action_right;
-
-    GameButtonState left_shouder;
-    GameButtonState right_shoulder;
-    
-    GameButtonState back;
-    GameButtonState start;
 };
 
 typedef struct GameControllerInput GameControllerInput;
@@ -40,7 +35,23 @@ struct GameControllerInput {
 
     union {
         GameButtonState buttons[12];
-        ConcreteGameButtonState concrete_buttons;
+        struct {
+            GameButtonState move_up;
+            GameButtonState move_down;
+            GameButtonState move_left;
+            GameButtonState move_right;
+            
+            GameButtonState action_up;
+            GameButtonState action_down;
+            GameButtonState action_left;
+            GameButtonState action_right;
+            
+            GameButtonState left_shouder;
+            GameButtonState right_shoulder;
+            
+            GameButtonState back;
+            GameButtonState start;
+        };
     };
 };
 
@@ -54,6 +65,22 @@ struct GameInput {
     GameControllerInput controllers[5];
 
     f32 dt_for_frame;
+};
+
+typedef struct GameOffscreenBuffer GameOffscreenBuffer;
+struct GameOffscreenBuffer {
+    i32 width;
+    i32 height;
+    void *memory;
+    u64 pitch;
+    i32 bytes_per_pixel;
+};
+
+typedef struct GameSoundOutputBuffer GameSoundOutputBuffer;
+struct GameSoundOutputBuffer {
+    u32 samples_per_second;
+    u32 sample_count;
+    i16 *samples;
 };
 
 typedef struct ThreadContext ThreadContext;
@@ -81,27 +108,20 @@ struct GameMemory {
 };
 
 
-typedef struct GameSoundOutputBuffer GameSoundOutputBuffer;
-struct GameSoundOutputBuffer {
-    u32 samples_per_second;
-    u32 sample_count;
-    i16 *samples;
-};
+// #define GAME_UPDATE_AND_RENDER(name) void name(ThreadContext *thread, GameOffscreenBuffer *buffer, GameInput *input, GameMemory *memory)
+// typedef GAME_UPDATE_AND_RENDER(GameUpdateAndRender);
 
-typedef struct GameOffscreenBuffer GameOffscreenBuffer;
-struct GameOffscreenBuffer {
-    i32 width;
-    i32 height;
-    void *memory;
-    u64 pitch;
-    i32 bytes_per_pixel;
-};
+// #define GAME_GET_SOUND_SAMPLES(name) void name(ThreadContext *thread, GameMemory *memory, GameSoundOutputBuffer *sound_buffer)
+// typedef GAME_GET_SOUND_SAMPLES(GameGetSoundSamples);
 
 typedef void (*GameGetSoundSamples)(ThreadContext *thread, GameMemory *memory, GameSoundOutputBuffer *sound_buffer);
 typedef void (*GameUpdateAndRender)(ThreadContext *thread, GameOffscreenBuffer *buffer, GameInput* input, GameMemory* memory);
 
 void render_gradient(GameOffscreenBuffer *buffer, i32 blue_offset, i32 green_offset);
 
-GameControllerInput *get_controller(GameInput *input, u64 controller_index);
+inline GameControllerInput *get_controller(GameInput *input, u64 controller_index) {
+    assert(controller_index < array_count(input->controllers));
+    return &input->controllers[controller_index];
+}
 
-#endif // VOID_H
+#endif // GAME_H

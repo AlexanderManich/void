@@ -1,14 +1,6 @@
 #ifndef WIN32_PLATFORM_H
 #define WIN32_PLATFORM_H
 
-#include <stdio.h>
-#include <windows.h>
-#include <intrin.h>
-#include "game.h"
-#include "lib_base.h"
-#include "lib_string.h"
-#include "lib_arena.h"
-
 typedef struct Win32DebugTimeMarker Win32DebugTimeMarker;
 struct Win32DebugTimeMarker {
     u32 output_play_cursor;

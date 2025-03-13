@@ -1,9 +1,7 @@
-#ifndef LIB_STRING_H
-#define LIB_STRING_H
+#ifndef BASE_STRING_H
+#define BASE_STRING_H
 
-#include "lib_base.h"
 #include "string.h"
-#include "lib_arena.h"
 
 typedef struct String8 String8;
 struct String8 {
@@ -26,4 +24,4 @@ String8 str8_last_slash_prefix(String8 string);
 String8 str8_last_slash_suffix(String8 string);
 
 String8 str8_concat(Arena *arena, String8 str1, String8 str2);
-#endif // LIB_STRING_H
+#endif // BASE_STRING_H

@@ -1,8 +1,15 @@
 #define UNICODE
 #define _UNICODE
 
+#include <stdio.h>
+#include <intrin.h>
+#include <windows.h>
+#include <dsound.h>
+#include "../base/base_include.h"
+#include "../game/game.h"
+#include "../base/base_include.c"
+
 #include "win32_platform.h"
-#include "dsound.h"
 
 b32 GLOBAL_RUNNING = true;
 b32 GLOBAL_PAUSE = false;
@@ -112,6 +119,44 @@ win32_clear_sound_buffer(Win32SoundOutput *sound_output) {
     GLOBAL_SECONDARY_BUFFER->Unlock(region1, region1_size, region2, region2_size);
 }
 
+void
+win32_fill_sound_buffer(Win32SoundOutput *sound_output, u32 byte_to_lock, u32 bytes_to_write, GameSoundOutputBuffer source_buffer) {
+    void* region1;
+    DWORD region1_size = 0;
+    void *region2;
+    DWORD region2_size = 0;
+    
+    GLOBAL_SECONDARY_BUFFER->Lock(byte_to_lock, bytes_to_write, &region1, &region1_size, &region2, &region2_size, 0); 
+
+    u32 region1_sample_count = region1_size / sound_output->bytes_per_sample; 
+    i16 *dest_sample = (i16 *)region1;
+    i16 *source_sample = source_buffer.samples;
+
+    for (i32 i = 0; i < region1_sample_count; i++) {
+        *dest_sample = *source_sample;
+        source_sample = dest_sample + 1;
+        dest_sample = source_sample + 1;
+        *dest_sample = *source_sample;
+        source_sample = dest_sample + 1;
+        dest_sample = source_sample + 1;
+        sound_output->running_sample_index++;
+    }
+
+    dest_sample = (i16 *)region2;
+    u32 region2_sample_count = region2_size / sound_output->bytes_per_sample;
+
+    for (i32 i = 0; i < region2_sample_count; i++) {
+        *dest_sample = *source_sample;
+        source_sample = dest_sample + 1;
+        dest_sample = source_sample + 1;
+        *dest_sample = *source_sample;
+        source_sample = dest_sample + 1;
+        dest_sample = source_sample + 1;
+        sound_output->running_sample_index++;
+    }
+
+    GLOBAL_SECONDARY_BUFFER->Unlock(region1, region1_size, region2, region2_size);
+}
 FILETIME 
 win32_get_last_write_time(String8 file_name) {
     WIN32_FILE_ATTRIBUTE_DATA data = {};
@@ -210,11 +255,11 @@ win32_process_keyboard_message(GameButtonState *new_state, b32 is_down) {
     }
 }
 
-LARGE_INTEGER 
+u32 
 win32_get_wall_clock() {
     LARGE_INTEGER result = {};
     QueryPerformanceCounter(&result);
-    return result;
+    return result.QuadPart;
 }
 
 f32
@@ -258,30 +303,46 @@ win32_process_pending_messages(Win32State *win32_state, GameControllerInput *key
                     switch (vk_code) {
                         case 'W': {
                             win32_process_keyboard_message(
-                                &keyboard_controller->concrete_buttons.move_up,
+                                &keyboard_controller->move_up,
                                 is_down
                             );
                             break;
                         }
                         case 'A': {
                             win32_process_keyboard_message(
-                                &keyboard_controller->concrete_buttons.move_left,
+                                &keyboard_controller->move_left,
                                 is_down
                             );
                             break;
                         }
                         case 'S': {
                             win32_process_keyboard_message(
-                                &keyboard_controller->concrete_buttons.move_down,
+                                &keyboard_controller->move_down,
                                 is_down
                             );
                             break;
                         }
                         case 'D': {
                             win32_process_keyboard_message(
-                                &keyboard_controller->concrete_buttons.move_down,
+                                &keyboard_controller->move_right,
                                 is_down
                             );
+                            break;
+                        }
+                        case 'P': {
+                            if (is_down) {
+                                GLOBAL_PAUSE = !GLOBAL_PAUSE;
+                            }
+                            break;
+                        }
+                        case 'L': {
+                            if (is_down) {
+                                if (win32_state->input_playing_index == 0) {
+                                    if (win32_state->input_recording_index == 0) {
+                                        // win32_begin_recording_input(win32_state, 1);
+                                    }
+                                }
+                            }
                             break;
                         }
                         case VK_RETURN: {
@@ -410,7 +471,6 @@ main_window_callback(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
 
     switch (message) {
         case WM_SIZE: {
-            OutputDebugString(L"WM_SIZE\n");
             break;
         }
         case WM_DESTROY: {
@@ -422,7 +482,13 @@ main_window_callback(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
             break;
         }
         case WM_ACTIVATEAPP: {
-            OutputDebugString(L"WM_ACTIVATE_APP\n");
+            // WPARAM is true or false depending on if window is active or not
+            // if (wparam == 1) {
+            //     SetLayeredWindowAttributes(window, 0, 255, LWA_ALPHA);
+            // } 
+            // else { 
+            //     SetLayeredWindowAttributes(window, 0, 128, LWA_ALPHA);
+            // }
             break;
         }
         case WM_PAINT: {
@@ -569,8 +635,8 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
                 GameInput *new_input = &input[0];
                 GameInput *old_input = &input[1];
                 
-                LARGE_INTEGER last_counter = win32_get_wall_clock();
-                LARGE_INTEGER flip_wall_clock = win32_get_wall_clock();
+                u32 last_counter = win32_get_wall_clock();
+                u32 flip_wall_clock = win32_get_wall_clock();
                
                 u64 debug_time_marker_index = 0;
                 Win32DebugTimeMarker debug_time_markers[30];
@@ -627,13 +693,12 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
                             );
                         }
 
-                        GameOffscreenBuffer buffer = {
-                            .width = GLOBAL_BACKBUFFER.width,
-                            .height = GLOBAL_BACKBUFFER.height,
-                            .memory = GLOBAL_BACKBUFFER.memory,
-                            .pitch = GLOBAL_BACKBUFFER.pitch,
-                            .bytes_per_pixel = GLOBAL_BACKBUFFER.bytes_per_pixel,
-                        };
+                        GameOffscreenBuffer buffer = {};
+                        buffer.width = GLOBAL_BACKBUFFER.width;
+                        buffer.height = GLOBAL_BACKBUFFER.height;
+                        buffer.memory = GLOBAL_BACKBUFFER.memory;
+                        buffer.pitch = GLOBAL_BACKBUFFER.pitch;
+                        buffer.bytes_per_pixel = GLOBAL_BACKBUFFER.bytes_per_pixel;
 
                         // if (win32_state.input_recording_index == 1) {
 
@@ -645,8 +710,8 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
                         //     (*game.update_and_render)(&thread, &buffer, new_input, &game_memory);
                         // }
 
-                        LARGE_INTEGER audio_wall_clock = win32_get_wall_clock();
-                        f32 from_begin_to_audio_seconds = win32_get_seconds_elapsed(flip_wall_clock.QuadPart, audio_wall_clock.QuadPart);
+                        u32 audio_wall_clock = win32_get_wall_clock();
+                        f32 from_begin_to_audio_seconds = win32_get_seconds_elapsed(flip_wall_clock, audio_wall_clock);
 
                         DWORD play_cursor = 0;
                         DWORD write_cursor = 0;
@@ -727,18 +792,81 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
                             / (f32)sound_output.bytes_per_sample
                             / (f32)sound_output.samples_per_second);
                             
-                            fprintf(stderr, "pc: {%d} wc: {%d} delta: {%d} {%d}",
-                                play_cursor, write_cursor, audio_latency_bytes, audio_latency_seconds);
+                            // fprintf(stderr, "pc: {%ld} wc: {%ld} delta: {%d} {%f}",
+                            //     play_cursor, write_cursor, audio_latency_bytes, audio_latency_seconds);
                         }
                         #endif // INTERNAL 
                         
+                        // win32_fill_sound_buffer(&sound_output, byte_to_lock, bytes_to_write, sound_buffer);
+
+                        u32 work_counter = win32_get_wall_clock();
+                        f32 work_seconds_elapsed = win32_get_seconds_elapsed(last_counter, work_counter);
+
+                        f32 seconds_elapsed_for_frame = work_seconds_elapsed;
+
+                        if (seconds_elapsed_for_frame < target_seconds_per_frame) {
+                            if (sleep_is_granular) {
+                                u32 sleep_ms = 1000.0 * (target_seconds_per_frame - seconds_elapsed_for_frame);
+                                if (sleep_ms > 0) {
+                                    Sleep(sleep_ms);
+                                }
+
+                                f32 test_seconds_elapsed_for_frame = win32_get_seconds_elapsed(last_counter, win32_get_wall_clock());
+
+                                if (test_seconds_elapsed_for_frame < target_seconds_per_frame) {
+                                    // LOGGING
+                                }
+                            }
+
+                            while (seconds_elapsed_for_frame < target_seconds_per_frame) {
+                                seconds_elapsed_for_frame = win32_get_seconds_elapsed(last_counter, win32_get_wall_clock());
+                            }
+                        }
+                        else {
+                            // LOGGING
+                        }
+
+                        u32 end_counter = win32_get_wall_clock();
+                        f32 ms_per_frame = 1000.0 * win32_get_seconds_elapsed(last_counter, end_counter);
+                        last_counter = end_counter;
+
+                        #if INTERNAL 
+                        {    
+                            // win32_debug_sync_display();
+                        }
+                        #endif // INTERNAL
+
                         HDC device_context = GetDC(window);
-                        
+
                         Win32WindowDimension dim = win32_get_window_dimension(window);
+
                         win32_display_buffer_in_window(device_context, &GLOBAL_BACKBUFFER, dim.height, dim.width);
                         
                         ReleaseDC(window, device_context);
-                        
+
+                        u32 flip_wall_clock = win32_get_wall_clock();
+
+                        // TODO: Make function
+                        GameInput *temp = new_input;
+                        new_input = old_input;
+                        old_input = temp;
+
+                        u64 end_cycle_count = _rdtsc();
+                        u64 cycles_elapsed = end_cycle_count - last_cycle_count;
+                        last_cycle_count = end_cycle_count;
+
+                        f32 fps = 0.0;
+                        f32 megac_per_frame = cycles_elapsed / (1000 * 1000);
+                        fprintf(stderr, "%.02f ms/f, %.02f fps, %.02f mc/f\n");
+
+                        #if INTERNAL
+                        {
+                            debug_time_marker_index++;
+                            if (debug_time_marker_index == array_count(debug_time_markers)) {
+                                debug_time_marker_index = 0;
+                            }
+                        }
+                        #endif         
                     }
                 }
             }

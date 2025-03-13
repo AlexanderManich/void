@@ -1,5 +1,3 @@
-#include "lib_arena.h"
-
 Arena *arena_init(Arena *arena, u8 *base, u64 size) {
     arena->base = base;
     arena->size = size;

@@ -10,6 +10,9 @@
         "*.cpp": "c",
         "win32_platform.h": "c",
         "game.h": "c",
-        "direct.h": "c"
+        "direct.h": "c",
+        "text_encoding": "cpp",
+        "typeinfo": "cpp",
+        "base_include.h": "c"
     },
 }

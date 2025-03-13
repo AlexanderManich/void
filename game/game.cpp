@@ -1,11 +1,21 @@
+#include "../base/base_include.h"
 #include "game.h"
 
-void render_gradient(GameOffscreenBuffer *buffer, i32 blue_offset, i32 green_offset) {
+void
+game_update_and_render(ThreadContext *thread, GameOffscreenBuffer *buffer, GameInput *input, GameMemory *memory) {
+    // TODO: assert len(input.controllers[0].button_state.buttons) ==
+    // assert();
+
+    assert(sizeof(GameState))
+}
+
+void
+render_gradient(GameOffscreenBuffer *buffer, i32 blue_offset, i32 green_offset) {
     // Draw bitmap to window.
     u8 *row = (u8 *)buffer->memory;
-    for (u64 y = 0; y < buffer->height; y++) {
+    for (i32 y = 0; y < buffer->height; y++) {
         u32 *pixel = (u32 *)row;
-        for (u64 x = 0; x < buffer->width; x++) {
+        for (i32 x = 0; x < buffer->width; x++) {
             u8 blue = (x + blue_offset);
             u8 green = (y + green_offset);
 
@@ -15,9 +25,4 @@ void render_gradient(GameOffscreenBuffer *buffer, i32 blue_offset, i32 green_off
 
         row += buffer->pitch;
     }
-}
-
-GameControllerInput *get_controller(GameInput *input, u64 controller_index) {
-    // assert!(controller_index < input.controllers.len());
-    return &input->controllers[controller_index];
 }

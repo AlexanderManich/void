@@ -1,5 +1,5 @@
-#ifndef LIB_BASE_H
-#define LIB_BASE_H
+#ifndef BASE_CORE_H
+#define BASE_CORE_H
 
 #include <stdint.h>
 
@@ -36,4 +36,4 @@ typedef int32_t b32;
 
 #define align_pow2(x,b) (((x) + (b) - 1) & (~((b) - 1)))
 
-#endif // LIB_BASE_H
+#endif // BASE_CORE_H

@@ -1,8 +1,5 @@
-#ifndef ARENA_H
-#define ARENA_H
-
-#include "lib_base.h"
-#include "string.h"
+#ifndef BASE_ARENA_H
+#define BASE_ARENA_H
 
 typedef struct Arena Arena;
 struct Arena {
@@ -36,4 +33,4 @@ u64 arena_pos(Arena *arena);
 TempArena temp_begin(Arena *arena);
 void temp_end(TempArena temp);
 
-#endif //ARENA_H
+#endif //BASE_ARENA_H

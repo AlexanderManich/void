@@ -1,5 +1,3 @@
-#include "lib_string.h"
-
 u64 calc_cstring_length(char *cstr) {
     u64 i = 0;
     for(; cstr[i]; i += 1);
@@ -7,7 +5,7 @@ u64 calc_cstring_length(char *cstr) {
 }
 
 String8 str8(u8 *str, u64 size) {
-    String8 string = {0};
+    String8 string = {};
     string.str  = str;
     string.size = size;
     return string;
