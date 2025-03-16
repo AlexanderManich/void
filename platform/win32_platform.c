@@ -6,10 +6,11 @@
 #include <windows.h>
 #include <dsound.h>
 #include "../base/base_include.h"
+#include "../game/tile.h"
 #include "../game/game.h"
-#include "../base/base_include.c"
-
 #include "win32_platform.h"
+
+#include "../base/base_include.c"
 
 b32 GLOBAL_RUNNING = true;
 b32 GLOBAL_PAUSE = false;
@@ -70,15 +71,15 @@ win32_init_d_sound(HWND window, i32 samples_per_second, u32 buffer_size) {
             wave_format.nAvgBytesPerSec = wave_format.nBlockAlign * wave_format.nSamplesPerSec;
             wave_format.cbSize = 0;
 
-            if (SUCCEEDED(direct_sound->SetCooperativeLevel(window, DSSCL_PRIORITY))) {
+            if (SUCCEEDED(direct_sound->lpVtbl->SetCooperativeLevel(direct_sound, window, DSSCL_PRIORITY))) {
                 DSBUFFERDESC buffer_description = {};
                 buffer_description.dwSize = sizeof(buffer_description);
                 buffer_description.dwFlags = DSBCAPS_PRIMARYBUFFER;
                 
                 LPDIRECTSOUNDBUFFER primary_buffer;
 
-                if (SUCCEEDED(direct_sound->CreateSoundBuffer(&buffer_description, &primary_buffer, 0))) {
-                    if (SUCCEEDED(primary_buffer->SetFormat(&wave_format))) {
+                if (SUCCEEDED(direct_sound->lpVtbl->CreateSoundBuffer(direct_sound, &buffer_description, &primary_buffer, 0))) {
+                    if (SUCCEEDED(primary_buffer->lpVtbl->SetFormat(primary_buffer, &wave_format))) {
 
                         DSBUFFERDESC buffer_description = {};
                         buffer_description.dwSize = sizeof(buffer_description);
@@ -86,7 +87,7 @@ win32_init_d_sound(HWND window, i32 samples_per_second, u32 buffer_size) {
                         buffer_description.dwBufferBytes = buffer_size;
                         buffer_description.lpwfxFormat = &wave_format;
 
-                        if (SUCCEEDED(direct_sound->CreateSoundBuffer(&buffer_description, &GLOBAL_SECONDARY_BUFFER, 0))) {
+                        if (SUCCEEDED(direct_sound->lpVtbl->CreateSoundBuffer(direct_sound, &buffer_description, &GLOBAL_SECONDARY_BUFFER, 0))) {
                         }
                     }
                 }
@@ -102,7 +103,7 @@ win32_clear_sound_buffer(Win32SoundOutput *sound_output) {
     void *region2;
     DWORD region2_size = 0;
 
-    GLOBAL_SECONDARY_BUFFER->Lock(0, sound_output->secondary_buffer_size, &region1, &region1_size, &region2, &region2_size, 0);
+    GLOBAL_SECONDARY_BUFFER->lpVtbl->Lock(GLOBAL_SECONDARY_BUFFER, 0, sound_output->secondary_buffer_size, &region1, &region1_size, &region2, &region2_size, 0);
     
     u8 *dest_sample = (u8 *)region1;
     for (u64 i = 0; i < region1_size; i++) {
@@ -116,7 +117,7 @@ win32_clear_sound_buffer(Win32SoundOutput *sound_output) {
         dest_sample += 1;
     }
 
-    GLOBAL_SECONDARY_BUFFER->Unlock(region1, region1_size, region2, region2_size);
+    GLOBAL_SECONDARY_BUFFER->lpVtbl->Unlock(GLOBAL_SECONDARY_BUFFER ,region1, region1_size, region2, region2_size);
 }
 
 void
@@ -126,7 +127,7 @@ win32_fill_sound_buffer(Win32SoundOutput *sound_output, u32 byte_to_lock, u32 by
     void *region2;
     DWORD region2_size = 0;
     
-    GLOBAL_SECONDARY_BUFFER->Lock(byte_to_lock, bytes_to_write, &region1, &region1_size, &region2, &region2_size, 0); 
+    GLOBAL_SECONDARY_BUFFER->lpVtbl->Lock(GLOBAL_SECONDARY_BUFFER ,byte_to_lock, bytes_to_write, &region1, &region1_size, &region2, &region2_size, 0); 
 
     u32 region1_sample_count = region1_size / sound_output->bytes_per_sample; 
     i16 *dest_sample = (i16 *)region1;
@@ -155,7 +156,7 @@ win32_fill_sound_buffer(Win32SoundOutput *sound_output, u32 byte_to_lock, u32 by
         sound_output->running_sample_index++;
     }
 
-    GLOBAL_SECONDARY_BUFFER->Unlock(region1, region1_size, region2, region2_size);
+    GLOBAL_SECONDARY_BUFFER->lpVtbl->Unlock(GLOBAL_SECONDARY_BUFFER, region1, region1_size, region2, region2_size);
 }
 FILETIME 
 win32_get_last_write_time(String8 file_name) {
@@ -170,8 +171,8 @@ win32_load_game_code(String8 source_dll_name, String8 temp_dll_name) {
     Win32GameCode result = {};
 
     result.dll_last_write_time = win32_get_last_write_time(source_dll_name);
-    CopyFile((LPCWSTR)source_dll_name.str, (LPCWSTR)temp_dll_name.str, false);
-    result.game_code_dll = LoadLibrary((LPCWSTR)temp_dll_name.str);
+    int error = CopyFileA(source_dll_name.str, temp_dll_name.str, false);
+    result.game_code_dll = LoadLibraryA(temp_dll_name.str);
 
     if (result.game_code_dll) {
         result.update_and_render = (GameUpdateAndRender *)GetProcAddress(result.game_code_dll, "game_update_and_render");
@@ -525,9 +526,9 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
 
     win32_get_exe_file_name(&global_arena, &win32_state);
 
-    String8 source_game_code_dll_full_path = str8_concat(&global_arena, win32_state.exe_dir_path, str8_lit("game.dll"));
+    String8 source_game_code_dll_full_path = str8_concat(&global_arena, win32_state.exe_dir_path, str8_lit("\\game.dll"));
 
-    String8 temp_game_code_dll_full_path = str8_concat(&global_arena, win32_state.exe_dir_path, str8_lit("temp_game.dll"));
+    String8 temp_game_code_dll_full_path = str8_concat(&global_arena, win32_state.exe_dir_path, str8_lit("\\temp_game.dll"));
 
     i32 desired_scheduler_ms = 1;
     b32 sleep_is_granular = timeBeginPeriod(desired_scheduler_ms) != TIMERR_NOERROR;
@@ -585,7 +586,7 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
 
             win32_clear_sound_buffer(&sound_output);
 
-            GLOBAL_SECONDARY_BUFFER->Play(0, 0, DSBPLAY_LOOPING);
+            GLOBAL_SECONDARY_BUFFER->lpVtbl->Play(GLOBAL_SECONDARY_BUFFER, 0, 0, DSBPLAY_LOOPING);
 
             GLOBAL_RUNNING = true;
             
@@ -647,10 +648,10 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
 
                 u64 last_cycle_count = _rdtsc();
 
-                // Win32GameCode game = win32_load_game_code(
-                //     source_game_code_dll_full_path,
-                //     temp_game_code_dll_full_path
-                // );
+                Win32GameCode game = win32_load_game_code(
+                    source_game_code_dll_full_path,
+                    temp_game_code_dll_full_path
+                );
 
                 while (GLOBAL_RUNNING) {
                     new_input->dt_for_frame = target_seconds_per_frame;
@@ -659,10 +660,10 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
                     FILETIME last_write_time = win32_get_last_write_time(source_game_code_dll_full_path);
                     new_dll_write_time = last_write_time;
 
-                    // if (CompareFileTime(&new_dll_write_time, &game.dll_last_write_time) != 0) {
-                    //     win32_unload_game_code(&game);
-                    //     game = win32_load_game_code(source_game_code_dll_full_path, temp_game_code_dll_full_path);
-                    // }
+                    if (CompareFileTime(&new_dll_write_time, &game.dll_last_write_time) != 0) {
+                        win32_unload_game_code(&game);
+                        game = win32_load_game_code(source_game_code_dll_full_path, temp_game_code_dll_full_path);
+                    }
 
                     GameControllerInput *old_keyboard_controller = get_controller(old_input, 0);
                     GameControllerInput *new_keyboard_controller = get_controller(new_input, 0);
@@ -706,9 +707,9 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
                         
                         ThreadContext thread = {};
 
-                        // if (game.update_and_render) {
-                        //     (*game.update_and_render)(&thread, &buffer, new_input, &game_memory);
-                        // }
+                        if (game.update_and_render) {
+                            (*game.update_and_render)(&thread, &buffer, new_input, &game_memory);
+                        }
 
                         u32 audio_wall_clock = win32_get_wall_clock();
                         f32 from_begin_to_audio_seconds = win32_get_seconds_elapsed(flip_wall_clock, audio_wall_clock);
@@ -716,7 +717,7 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
                         DWORD play_cursor = 0;
                         DWORD write_cursor = 0;
 
-                        if (GLOBAL_SECONDARY_BUFFER->GetCurrentPosition(&play_cursor, &write_cursor) != DS_OK) {
+                        if (GLOBAL_SECONDARY_BUFFER->lpVtbl->GetCurrentPosition(GLOBAL_SECONDARY_BUFFER, &play_cursor, &write_cursor) != DS_OK) {
                             sound_is_valid = false;
                         }
 
@@ -857,7 +858,7 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
 
                         f32 fps = 0.0;
                         f32 megac_per_frame = cycles_elapsed / (1000 * 1000);
-                        fprintf(stderr, "%.02f ms/f, %.02f fps, %.02f mc/f\n");
+                        // fprintf(stderr, "%.02f ms/f, %.02f fps, %.02f mc/f\n", ms_per_frame, fps, megac_per_frame);
 
                         #if INTERNAL
                         {

@@ -1,5 +1,5 @@
 {
-    "C_Cpp.default.compilerPath": "C:/msys64/ucrt64/bin/g++.exe",
+    "C_Cpp.default.compilerPath": "C:/msys64/ucrt64/bin/gcc.exe",
     "files.associations": {
         "*.json.liquid": "json",
         "*.yaml.liquid": "yaml",
@@ -11,8 +11,10 @@
         "win32_platform.h": "c",
         "game.h": "c",
         "direct.h": "c",
-        "text_encoding": "cpp",
-        "typeinfo": "cpp",
-        "base_include.h": "c"
+        "text_encoding": "c",
+        "typeinfo": "c",
+        "base_include.h": "c",
+        "functional": "c",
+        "random": "c"
     },
 }

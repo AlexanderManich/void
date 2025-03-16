@@ -63,9 +63,11 @@ String8 str8_last_slash_suffix(String8 string) {
 }
 
 String8 str8_concat(Arena *arena, String8 str1, String8 str2) {
-    u8 *buffer = push_array_no_zero(arena, u8, str1.size + str2.size);
-    String8 result = str8(buffer, str1.size + str2.size);
+    String8 result;
+    result.size = str1.size + str2.size;
+    result.str = push_array_no_zero(arena, u8, result.size + 1);
     memcpy(result.str, str1.str, str1.size);
     memcpy(result.str + str1.size, str2.str, str2.size);
+    result.str[result.size] = 0;
     return result;
 }

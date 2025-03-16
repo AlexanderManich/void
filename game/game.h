@@ -1,21 +1,66 @@
-#ifndef GAME_H
-#define GAME_H
+#pragma once
 
 
+#pragma pack(push, 1)
+typedef struct BitmapHeader BitmapHeader;
+struct BitmapHeader {
+    u16 file_type;
+    u32 file_size;
+    u16 reserved_1;
+    u16 reserved_2;
+    u32 bitmap_offset;
+    u32 size;
+    i32 width;
+    i32 height;
+    u16 planes;
+    u16 bits_per_pixel;
+    u32 compression;
+    u32 size_of_bitmap;
+    i32 horz_resolution;
+    i32 vert_resolution;
+    u32 colors_used;
+    u32 colors_important;
+
+    u32 red_mask;
+    u32 green_mask;
+    u32 blue_mask;
+};
+#pragma pack(pop)
+
+typedef struct LoadedBitmap LoadedBitmap;
+struct LoadedBitmap {
+    i32 width;
+    i32 height;
+    u32 *pixels;
+};
+
+typedef struct HeroBitmaps HeroBitmaps;
+struct HeroBitmaps {
+    i32 align_x;
+    i32 align_y;
+
+    LoadedBitmap whole_player;
+    LoadedBitmap cape;
+};
+
+typedef struct World World;
+struct World {
+    TileMap *tile_map;
+};
 
 typedef struct GameState GameState;
 struct GameState {
     Arena world_arena;
-    // World arena;
+    World *world;
 
-    // TileMapPosition camera_p;
-    // TileMapPosition player_p;
-    // Vec2 d_player_p;
+    TileMapPosition camera_p;
+    TileMapPosition player_p;
+    Vec2 d_player_p;
 
-    // Loaded_Bitmap backdrop;
+    LoadedBitmap backdrop;
 
     u64 hero_facing_direction;
-    // HeroBitMaps hero_bitmaps[6];
+    HeroBitmaps hero_bitmaps[6];
 };
 
 // Game Input
@@ -108,20 +153,15 @@ struct GameMemory {
 };
 
 
-// #define GAME_UPDATE_AND_RENDER(name) void name(ThreadContext *thread, GameOffscreenBuffer *buffer, GameInput *input, GameMemory *memory)
-// typedef GAME_UPDATE_AND_RENDER(GameUpdateAndRender);
+#define GAME_UPDATE_AND_RENDER(name) void name(ThreadContext *thread, GameOffscreenBuffer *buffer, GameInput *input, GameMemory *memory)
+typedef GAME_UPDATE_AND_RENDER(GameUpdateAndRender);
 
-// #define GAME_GET_SOUND_SAMPLES(name) void name(ThreadContext *thread, GameMemory *memory, GameSoundOutputBuffer *sound_buffer)
-// typedef GAME_GET_SOUND_SAMPLES(GameGetSoundSamples);
-
-typedef void (*GameGetSoundSamples)(ThreadContext *thread, GameMemory *memory, GameSoundOutputBuffer *sound_buffer);
-typedef void (*GameUpdateAndRender)(ThreadContext *thread, GameOffscreenBuffer *buffer, GameInput* input, GameMemory* memory);
+#define GAME_GET_SOUND_SAMPLES(name) void name(ThreadContext *thread, GameMemory *memory, GameSoundOutputBuffer *sound_buffer)
+typedef GAME_GET_SOUND_SAMPLES(GameGetSoundSamples);
 
 void render_gradient(GameOffscreenBuffer *buffer, i32 blue_offset, i32 green_offset);
 
-inline GameControllerInput *get_controller(GameInput *input, u64 controller_index) {
+GameControllerInput *get_controller(GameInput *input, u64 controller_index) {
     assert(controller_index < array_count(input->controllers));
     return &input->controllers[controller_index];
 }
-
-#endif // GAME_H
