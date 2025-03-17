@@ -36,6 +36,6 @@ struct TileMapPosition {
     u32 abs_tile_y;
     u32 abs_tile_z;
 
-    // Vec2 offset;
+    Vec2 offset;
 };
 

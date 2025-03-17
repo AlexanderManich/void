@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <dsound.h>
 #include "../base/base_include.h"
+#include "../intrinsics.h"
 #include "../game/tile.h"
 #include "../game/game.h"
 #include "win32_platform.h"
@@ -566,7 +567,6 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
             if (win32_refresh_rate > 1) {
                 monitor_refresh_hz = win32_refresh_rate;
             }
-
             // TODO: If game_update_hz is too big, sound starts bugging. Ideally It should be monitor_refresh_hz / 2
             f32 game_update_hz = monitor_refresh_hz / 2.0;
             f32 target_seconds_per_frame = 1.0 / game_update_hz;
