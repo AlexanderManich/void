@@ -1,6 +1,6 @@
 @echo off
 
-set CFLAGS=-Wall -Wextra -pedantic -g
+set CFLAGS=-Wall -Wextra -g
 
 set INCLUDE=-Igame
 set LIBS=-lgdi32 -lwinmm

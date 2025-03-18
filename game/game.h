@@ -1,6 +1,5 @@
 #pragma once
 
-
 #pragma pack(push, 1)
 typedef struct BitmapHeader BitmapHeader;
 struct BitmapHeader {

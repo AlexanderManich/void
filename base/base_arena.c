@@ -1,4 +1,4 @@
-Arena *arena_init(Arena *arena, u8 *base, u64 size) {
+static Arena *arena_init(Arena *arena, u8 *base, u64 size) {
     arena->base = base;
     arena->size = size;
     arena->pos = 0;

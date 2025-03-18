@@ -14,7 +14,7 @@ struct TempArena {
     u64 pos;
 };
 
-Arena *arena_init(Arena *arena, u8 *base, u64 size);
+static Arena *arena_init(Arena *arena, u8 *base, u64 size);
 void arena_release(Arena *arena);
 
 void *arena_push(Arena *arena, u64 size, u64 align);

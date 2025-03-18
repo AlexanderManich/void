@@ -4,6 +4,9 @@
 #include "tile.h"
 #include "game.h"
 
+#include "../base/base_include.c"
+#include "tile.c"
+
 LoadedBitmap 
 debug_load_bmp(ThreadContext *thread, DebugPlatformReadEntireFile *read_entire_file, String8 file_name) {
     LoadedBitmap result = {};
@@ -50,6 +53,33 @@ debug_load_bmp(ThreadContext *thread, DebugPlatformReadEntireFile *read_entire_f
     }
     //Byte order in memory is BB GG RR AA, bottom up
     return result;
+}
+
+void draw_rectangle(GameOffscreenBuffer *buffer, Vec2 v_min, Vec2 v_max, f32 r, f32 g, f32 b) {
+    i32 min_x = round_f32_to_i32(v_min.x);
+    i32 min_y = round_f32_to_i32(v_min.y);
+    i32 max_x = round_f32_to_i32(v_max.x);
+    i32 max_y = round_f32_to_i32(v_max.y);
+
+    if (min_x < 0) {
+        min_x = 0;
+    }
+    if (min_y < 0) {
+        min_y = 0;
+    }
+    if (max_x > buffer->width) {
+        max_x = buffer->width;
+    }
+    if (max_y > buffer->height) {
+        max_y = buffer->height;
+    }
+
+    // TODO: Is this right?
+    u32 color = (round_f32_to_u32(r * 255.0) << 16)
+        | (round_f32_to_u32(g * 255.0) << 8)
+        | (round_f32_to_u32(b * 255.0) << 0);
+    
+    u8 *row = (u8 *)(buffer->memory + ((min_x * buffer->bytes_per_pixel) + (min_y * buffer->pitch)));
 }
 
 void
@@ -149,8 +179,8 @@ game_update_and_render(ThreadContext *thread, GameOffscreenBuffer *buffer, GameI
                 door_top = true;
             }
 
-            for (i32 tile_y = 0; tile_y < tiles_per_height; tile_y++) {
-                for (i32 tile_x = 0; tile_x < tiles_per_width; tile_x++) {
+            for (u32 tile_y = 0; tile_y < tiles_per_height; tile_y++) {
+                for (u32 tile_x = 0; tile_x < tiles_per_width; tile_x++) {
                     u32 abs_tile_x = (screen_x * tiles_per_height) + tile_x;
                     u32 abs_tile_y = (screen_y * tiles_per_width) + tile_y;
 
@@ -177,14 +207,14 @@ game_update_and_render(ThreadContext *thread, GameOffscreenBuffer *buffer, GameI
                         }
                     }
 
-                    // set_tile_value(
-                    //     &game_state->world_arena,
-                    //     world->tile_map,
-                    //     abs_tile_x,
-                    //     abs_tile_y,
-                    //     abs_tile_z,
-                    //     tile_value
-                    // );
+                    set_tile_value(
+                        &game_state->world_arena,
+                        world->tile_map,
+                        abs_tile_x,
+                        abs_tile_y,
+                        abs_tile_z,
+                        tile_value
+                    );
                 }
             }
 
@@ -266,9 +296,91 @@ game_update_and_render(ThreadContext *thread, GameOffscreenBuffer *buffer, GameI
             }
             dd_player = vec2_mul(dd_player, player_speed);
 
-            // dd_player = vec2_add(dd_player, vec2_mul())
+            dd_player = vec2_add(dd_player, vec2_mul(vec2_neg(game_state->d_player_p), 3.5));
+
+            TileMapPosition new_player_p = game_state->player_p;
+            // 1/2 * a * dt + v * dt + p
+            Vec2 t1 = vec2_mul(vec2_mul(dd_player, 0.5), square(input->dt_for_frame));
+            Vec2 t2 = vec2_mul(game_state->d_player_p, input->dt_for_frame);
+            new_player_p.offset = vec2_add(vec2_add(t1, t2), new_player_p.offset);
+
+            game_state->d_player_p = vec2_add(vec2_mul(dd_player, input->dt_for_frame), game_state->d_player_p);
+
+            new_player_p = recanonicalize_position(tile_map, new_player_p);
+
+            TileMapPosition player_left = new_player_p;
+            player_left.offset.x -= player_width * 0.5;
+            player_left = recanonicalize_position(tile_map, player_left);
+
+            TileMapPosition player_right = new_player_p;
+            player_right.offset.x += player_width * 0.5;
+            player_right = recanonicalize_position(tile_map, player_right);
+
+            b32 collided = false;
+            TileMapPosition col_p = {};
+
+            if (!is_tile_map_point_empty(tile_map, new_player_p)) {
+                col_p = new_player_p;
+                collided = true;
+            }
+
+            if (!is_tile_map_point_empty(tile_map, player_left)) {
+                col_p = new_player_p;
+                collided = true;
+            }
+
+            if (!is_tile_map_point_empty(tile_map, player_right)) {
+                col_p = new_player_p;
+                collided = true;
+            }
+
+            if (collided) {
+                Vec2 r = {};
+
+                if (col_p.abs_tile_x < game_state->player_p.abs_tile_x) {
+                    r = vec2(1.0, 0.0);
+                }
+                if (col_p.abs_tile_x > game_state->player_p.abs_tile_x) {
+                    r = vec2(-1.0, 0.0);
+                }
+                if (col_p.abs_tile_y < game_state->player_p.abs_tile_y) {
+                    r = vec2(0.0, 1.0);
+                }
+                if (col_p.abs_tile_y > game_state->player_p.abs_tile_y) {
+                    r = vec2(0.0, -1.0);
+                }
+                Vec2 t1 = vec2_mul(vec2_mul(r, vec2_dot(game_state->d_player_p, r)), 1.0);
+                game_state->d_player_p = vec2_sub(game_state->d_player_p, t1);
+            }
+            else {
+                if (!are_on_same_tile(&game_state->player_p, &new_player_p)) {
+                    u32 new_tile_value = get_tile_value_from_map_pos(tile_map, new_player_p);
+                    if (new_tile_value == 3) {
+                        new_player_p.abs_tile_z += 1;
+                    }
+                    else if (new_tile_value == 4) {
+                        new_player_p.abs_tile_z -= 1;
+                    }
+                }
+                game_state->player_p = new_player_p;
+                game_state->camera_p = new_player_p;
+            }
         }
     }
+
+    //Clear Screen
+    draw_rectangle(
+        buffer, 
+        vec2(0.0, 0.0),
+        vec2((f32)buffer->width, (f32)buffer->height),
+        1.0,
+        0.0,
+        1.0
+    );
+
+    // Draw background
+    // draw_bitmap(buffer, &game_state.backdrop, 0.0, 0.0, 0, 0);
+
 }
 
 void
