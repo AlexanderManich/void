@@ -1,4 +1,5 @@
 #include "tile.h"
+#include "../base/base_include.h"
 
 TileChunkPosition get_chunk_pos_for(TileMap *tile_map, u32 abs_tile_x, u32 abs_tile_y, u32 abs_tile_z) {
     TileChunkPosition result = {};
@@ -54,7 +55,7 @@ void set_tile_value(Arena *arena, TileMap *tile_map, u32 abs_tile_x, u32 abs_til
 
         tile_chunk->tiles = push_array(arena, u32, tile_count);
 
-        for (i32 tile_index = 0; tile_index < tile_count; tile_index++) {
+        for (u32 tile_index = 0; tile_index < tile_count; tile_index++) {
             *(tile_chunk->tiles + tile_index) = 1; 
         }
     }
@@ -68,6 +69,8 @@ u32 get_tile_value_unchecked(TileMap *tile_map, TileChunk *tile_chunk, u32 tile_
     assert(tile_y < tile_map->chunk_dim);
 
     u32 tile_chunk_value = *(tile_chunk->tiles + (tile_y * tile_map->chunk_dim + tile_x));
+
+    return tile_chunk_value;
 }
 
 u32 _get_tile_value(TileMap *tile_map, TileChunk *tile_chunk, u32 test_tile_x, u32 test_tile_y) {
@@ -76,6 +79,8 @@ u32 _get_tile_value(TileMap *tile_map, TileChunk *tile_chunk, u32 test_tile_x, u
     if (tile_chunk && tile_chunk->tiles) {
         tile_chunk_value = get_tile_value_unchecked(tile_map, tile_chunk, test_tile_x, test_tile_y);
     }
+    
+    return tile_chunk_value;
 }
 
 u32 get_tile_value(TileMap *tile_map, u32 abs_tile_x, u32 abs_tile_y, u32 abs_tile_z) {
@@ -119,4 +124,6 @@ b32 are_on_same_tile(TileMapPosition *a, TileMapPosition *b) {
     b32 result = a->abs_tile_x == b->abs_tile_x 
         && a->abs_tile_y == b->abs_tile_y 
         && a->abs_tile_z == b->abs_tile_z;
+
+    return result;
 }

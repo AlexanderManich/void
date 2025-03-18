@@ -134,7 +134,7 @@ win32_fill_sound_buffer(Win32SoundOutput *sound_output, u32 byte_to_lock, u32 by
     i16 *dest_sample = (i16 *)region1;
     i16 *source_sample = source_buffer.samples;
 
-    for (i32 i = 0; i < region1_sample_count; i++) {
+    for (u32 i = 0; i < region1_sample_count; i++) {
         *dest_sample = *source_sample;
         source_sample = dest_sample + 1;
         dest_sample = source_sample + 1;
@@ -147,7 +147,7 @@ win32_fill_sound_buffer(Win32SoundOutput *sound_output, u32 byte_to_lock, u32 by
     dest_sample = (i16 *)region2;
     u32 region2_sample_count = region2_size / sound_output->bytes_per_sample;
 
-    for (i32 i = 0; i < region2_sample_count; i++) {
+    for (u32 i = 0; i < region2_sample_count; i++) {
         *dest_sample = *source_sample;
         source_sample = dest_sample + 1;
         dest_sample = source_sample + 1;
@@ -172,8 +172,8 @@ win32_load_game_code(String8 source_dll_name, String8 temp_dll_name) {
     Win32GameCode result = {};
 
     result.dll_last_write_time = win32_get_last_write_time(source_dll_name);
-    int error = CopyFileA(source_dll_name.str, temp_dll_name.str, false);
-    result.game_code_dll = LoadLibraryA(temp_dll_name.str);
+    CopyFileA((char *)source_dll_name.str, (char *)temp_dll_name.str, false);
+    result.game_code_dll = LoadLibraryA((char *)temp_dll_name.str);
 
     if (result.game_code_dll) {
         result.update_and_render = (GameUpdateAndRender *)GetProcAddress(result.game_code_dll, "game_update_and_render");

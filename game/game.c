@@ -258,7 +258,7 @@ game_update_and_render(ThreadContext *thread, GameOffscreenBuffer *buffer, GameI
     i32 tile_side_in_pixels = 60;
     f32 meters_to_pixels = (f32)tile_side_in_pixels / tile_map->tile_side_in_meters;
 
-    for (i32 controller_index = 0; controller_index < array_count(input->controllers); controller_index++) {
+    for (u64 controller_index = 0; controller_index < array_count(input->controllers); controller_index++) {
         GameControllerInput *controller = get_controller(input, controller_index);
 
         if (controller->is_analog) {
