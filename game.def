@@ -1,0 +1,2 @@
+EXPORTS
+    game_update_and_render

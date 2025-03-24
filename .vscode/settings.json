@@ -1,5 +1,5 @@
 {
-    "C_Cpp.default.compilerPath": "C:/msys64/ucrt64/bin/gcc.exe",
+    "C_Cpp.default.compilerPath": "C:/msys64/ucrt64/bin/g++.exe",
     "files.associations": {
         "*.json.liquid": "json",
         "*.yaml.liquid": "yaml",
@@ -7,14 +7,14 @@
         "*.js.liquid": "liquid-javascript",
         "*.css.liquid": "liquid-css",
         "*.scss.liquid": "liquid-scss",
-        "*.cpp": "c",
-        "win32_platform.h": "c",
-        "game.h": "c",
-        "direct.h": "c",
-        "text_encoding": "c",
-        "typeinfo": "c",
-        "base_include.h": "c",
-        "functional": "c",
-        "random": "c"
+        "*.cpp": "cpp",
+        "win32_platform.h": "cpp",
+        "game.h": "cpp",
+        "direct.h": "cpp",
+        "text_encoding": "cpp",
+        "typeinfo": "cpp",
+        "base_include.h": "cpp",
+        "functional": "cpp",
+        "random": "cpp"
     },
 }

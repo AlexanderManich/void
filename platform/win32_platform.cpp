@@ -71,16 +71,15 @@ win32_init_d_sound(HWND window, i32 samples_per_second, u32 buffer_size) {
             wave_format.nBlockAlign = (wave_format.nChannels * wave_format.wBitsPerSample) / 8;
             wave_format.nAvgBytesPerSec = wave_format.nBlockAlign * wave_format.nSamplesPerSec;
             wave_format.cbSize = 0;
-
-            if (SUCCEEDED(direct_sound->lpVtbl->SetCooperativeLevel(direct_sound, window, DSSCL_PRIORITY))) {
+            if (SUCCEEDED(direct_sound->SetCooperativeLevel(window, DSSCL_PRIORITY))) {
                 DSBUFFERDESC buffer_description = {};
                 buffer_description.dwSize = sizeof(buffer_description);
                 buffer_description.dwFlags = DSBCAPS_PRIMARYBUFFER;
                 
                 LPDIRECTSOUNDBUFFER primary_buffer;
 
-                if (SUCCEEDED(direct_sound->lpVtbl->CreateSoundBuffer(direct_sound, &buffer_description, &primary_buffer, 0))) {
-                    if (SUCCEEDED(primary_buffer->lpVtbl->SetFormat(primary_buffer, &wave_format))) {
+                if (SUCCEEDED(direct_sound->CreateSoundBuffer(&buffer_description, &primary_buffer, 0))) {
+                    if (SUCCEEDED(primary_buffer->SetFormat(&wave_format))) {
 
                         DSBUFFERDESC buffer_description = {};
                         buffer_description.dwSize = sizeof(buffer_description);
@@ -88,7 +87,7 @@ win32_init_d_sound(HWND window, i32 samples_per_second, u32 buffer_size) {
                         buffer_description.dwBufferBytes = buffer_size;
                         buffer_description.lpwfxFormat = &wave_format;
 
-                        if (SUCCEEDED(direct_sound->lpVtbl->CreateSoundBuffer(direct_sound, &buffer_description, &GLOBAL_SECONDARY_BUFFER, 0))) {
+                        if (SUCCEEDED(direct_sound->CreateSoundBuffer(&buffer_description, &GLOBAL_SECONDARY_BUFFER, 0))) {
                         }
                     }
                 }
@@ -104,7 +103,7 @@ win32_clear_sound_buffer(Win32SoundOutput *sound_output) {
     void *region2;
     DWORD region2_size = 0;
 
-    GLOBAL_SECONDARY_BUFFER->lpVtbl->Lock(GLOBAL_SECONDARY_BUFFER, 0, sound_output->secondary_buffer_size, &region1, &region1_size, &region2, &region2_size, 0);
+    GLOBAL_SECONDARY_BUFFER->Lock(0, sound_output->secondary_buffer_size, &region1, &region1_size, &region2, &region2_size, 0);
     
     u8 *dest_sample = (u8 *)region1;
     for (u64 i = 0; i < region1_size; i++) {
@@ -118,7 +117,7 @@ win32_clear_sound_buffer(Win32SoundOutput *sound_output) {
         dest_sample += 1;
     }
 
-    GLOBAL_SECONDARY_BUFFER->lpVtbl->Unlock(GLOBAL_SECONDARY_BUFFER ,region1, region1_size, region2, region2_size);
+    GLOBAL_SECONDARY_BUFFER->Unlock(region1, region1_size, region2, region2_size);
 }
 
 void
@@ -128,7 +127,7 @@ win32_fill_sound_buffer(Win32SoundOutput *sound_output, u32 byte_to_lock, u32 by
     void *region2;
     DWORD region2_size = 0;
     
-    GLOBAL_SECONDARY_BUFFER->lpVtbl->Lock(GLOBAL_SECONDARY_BUFFER ,byte_to_lock, bytes_to_write, &region1, &region1_size, &region2, &region2_size, 0); 
+    GLOBAL_SECONDARY_BUFFER->Lock(byte_to_lock, bytes_to_write, &region1, &region1_size, &region2, &region2_size, 0); 
 
     u32 region1_sample_count = region1_size / sound_output->bytes_per_sample; 
     i16 *dest_sample = (i16 *)region1;
@@ -157,12 +156,12 @@ win32_fill_sound_buffer(Win32SoundOutput *sound_output, u32 byte_to_lock, u32 by
         sound_output->running_sample_index++;
     }
 
-    GLOBAL_SECONDARY_BUFFER->lpVtbl->Unlock(GLOBAL_SECONDARY_BUFFER, region1, region1_size, region2, region2_size);
+    GLOBAL_SECONDARY_BUFFER->Unlock(region1, region1_size, region2, region2_size);
 }
 FILETIME 
 win32_get_last_write_time(String8 file_name) {
     WIN32_FILE_ATTRIBUTE_DATA data = {};
-    GetFileAttributesEx((LPCWSTR)file_name.str, GetFileExInfoStandard, &data);
+    GetFileAttributesExA((char *)file_name.str, GetFileExInfoStandard, &data);
     FILETIME last_write_time = data.ftLastWriteTime;
     return last_write_time;
 }
@@ -586,7 +585,7 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
 
             win32_clear_sound_buffer(&sound_output);
 
-            GLOBAL_SECONDARY_BUFFER->lpVtbl->Play(GLOBAL_SECONDARY_BUFFER, 0, 0, DSBPLAY_LOOPING);
+            GLOBAL_SECONDARY_BUFFER->Play(0, 0, DSBPLAY_LOOPING);
 
             GLOBAL_RUNNING = true;
             
@@ -717,7 +716,7 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
                         DWORD play_cursor = 0;
                         DWORD write_cursor = 0;
 
-                        if (GLOBAL_SECONDARY_BUFFER->lpVtbl->GetCurrentPosition(GLOBAL_SECONDARY_BUFFER, &play_cursor, &write_cursor) != DS_OK) {
+                        if (GLOBAL_SECONDARY_BUFFER->GetCurrentPosition(&play_cursor, &write_cursor) != DS_OK) {
                             sound_is_valid = false;
                         }
 

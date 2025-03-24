@@ -1,11 +1,11 @@
 #include "../base/base_include.h"
-#include "../intrinsics.h"
 #include "../random.h"
+#include "../intrinsics.h"
 #include "tile.h"
 #include "game.h"
 
 #include "../base/base_include.c"
-#include "tile.c"
+#include "tile.cpp"
 
 LoadedBitmap 
 debug_load_bmp(ThreadContext *thread, DebugPlatformReadEntireFile *read_entire_file, String8 file_name) {
@@ -13,49 +13,110 @@ debug_load_bmp(ThreadContext *thread, DebugPlatformReadEntireFile *read_entire_f
 
     String8 read_result = (*read_entire_file)(thread, file_name);
 
-    BitmapHeader *header = (BitmapHeader *)read_result.str;
-    u32 *contents = (u32 *)read_result.str;
+    if (read_result.size) {
 
-    u32 *pixels = (u32 *)((u8 *)contents + header->bitmap_offset);
+        BitmapHeader *header = (BitmapHeader *)read_result.str;
+        u32 *contents = (u32 *)read_result.str;
+        
+        u32 *pixels = (u32 *)((u8 *)contents + header->bitmap_offset);
+        
+        result.pixels = pixels;
+        result.width = header->width;
+        result.height = header->height;
+        
+        assert(header->compression == 3);
+        
+        u32 red_mask = header->red_mask;
+        u32 green_mask = header->green_mask;
+        u32 blue_mask = header->blue_mask;
+        u32 alpha_mask = ~(red_mask | green_mask | blue_mask);
+        
+        BitScanResult red_shift = find_least_significant_set_bit(red_mask);
+        BitScanResult green_shift = find_least_significant_set_bit(green_mask);
+        BitScanResult blue_shift = find_least_significant_set_bit(blue_mask);
+        BitScanResult alpha_shift = find_least_significant_set_bit(alpha_mask);
+        
+        assert(red_shift.found);
+        assert(green_shift.found);
+        assert(blue_shift.found);
+        assert(alpha_shift.found);
 
-    result.pixels = pixels;
-    result.width = header->width;
-    result.height = header->height;
-
-    assert(header->compression == 3);
-
-    u32 red_mask = header->red_mask;
-    u32 green_mask = header->green_mask;
-    u32 blue_mask = header->blue_mask;
-    u32 alpha_mask = ~(red_mask | green_mask | blue_mask);
-
-    BitScanResult red_shift = find_least_significant_set_bit(red_mask);
-    BitScanResult green_shift = find_least_significant_set_bit(green_mask);
-    BitScanResult blue_shift = find_least_significant_set_bit(blue_mask);
-    BitScanResult alpha_shift = find_least_significant_set_bit(alpha_mask);
-
-    assert(red_shift.found);
-    assert(green_shift.found);
-    assert(blue_shift.found);
-    assert(alpha_shift.found);
-
-    u32 *source_dest = pixels;
-
-    for (i32 y = 0; y < header->height; y++) {
-        for ( i32 x = 0; x < header->width; x++) {
-            u32 c = *source_dest;
-            *source_dest = ((((c >> alpha_shift.index) & 0xFF) << 24) |
+        u32 *source_dest = pixels;
+        
+        for (i32 y = 0; y < header->height; y++) {
+            for (i32 x = 0; x < header->width; x++) {
+                u32 c = *source_dest;
+                *source_dest = ((((c >> alpha_shift.index) & 0xFF) << 24) |
                             (((c >> red_shift.index)   & 0xFF) << 16) |
                             (((c >> green_shift.index) & 0xFF) << 8)  |
                             (((c >> blue_shift.index)  & 0xFF) << 0));
-            *source_dest += 1;
+                source_dest += 1;
+            }
         }
     }
     //Byte order in memory is BB GG RR AA, bottom up
     return result;
 }
 
-void draw_rectangle(GameOffscreenBuffer *buffer, Vec2 v_min, Vec2 v_max, f32 r, f32 g, f32 b) {
+void draw_bitmap(GameOffscreenBuffer *buffer, LoadedBitmap *bitmap, f32 real_x, f32 real_y, i32 align_x, i32 align_y) {
+    if (align_x) {
+        real_x -= (f32)align_x;
+    }
+    if (align_y) {
+        real_y -= (f32)align_y;
+    }
+
+    i32 min_x = round_f32_to_i32(real_x);
+    i32 min_y = round_f32_to_i32(real_y);
+    i32 max_x = round_f32_to_i32(real_x + (f32)bitmap->width);
+    i32 max_y = round_f32_to_i32(real_y + (f32)bitmap->height);
+
+    if (min_x < 0) {
+        min_x = 0;
+    }
+    if (min_y < 0) {
+        min_y = 0;
+    }
+    if (max_x > buffer->width) {
+        max_x = buffer->width;
+    }
+    if (max_y > buffer->height) {
+        max_y = buffer->height;
+    }
+
+    u32 *source_row = bitmap->pixels + bitmap->width * (bitmap->height - 1);
+    u8 *dest_row = ((u8 *)buffer->memory + min_x * buffer->bytes_per_pixel + min_y * buffer->pitch);
+
+    for (i32 y = min_y; y < max_y; y++) {
+        u32 *dest = (u32 *)dest_row;
+        u32 *source = source_row;
+        for (i32 x = min_x; x < max_x; x++) {
+            // *dest = *source;
+            f32 a  = (f32)((*source >> 24) & 0xFF) / 255.0;
+            f32 sr = (f32)((*source >> 16) & 0xFF);
+            f32 sg = (f32)((*source >> 8)  & 0xFF);
+            f32 sb = (f32)((*source >> 0)  & 0xFF);
+            
+            f32 dr = (f32)((*dest >> 16) & 0xFF);
+            f32 dg = (f32)((*dest >> 8)  & 0xFF);
+            f32 db = (f32)((*dest >> 0)  & 0xFF);
+            
+            f32 r = (1.0 - a) * dr + a * sr;
+            f32 g = (1.0 - a) * dg + a * sg;
+            f32 b = (1.0 - a) * db + a * sb;
+            
+            *dest = (((u32)(r + 0.5) << 16) | ((u32)(g + 0.5) << 8) | ((u32)(b + 0.5) << 0));
+            
+            dest += 1;
+            source += 1;
+        }
+        dest_row += buffer->pitch;
+        source_row -= bitmap->width;
+    }
+}
+
+void 
+draw_rectangle(GameOffscreenBuffer *buffer, Vec2 v_min, Vec2 v_max, f32 r, f32 g, f32 b) {
     i32 min_x = round_f32_to_i32(v_min.x);
     i32 min_y = round_f32_to_i32(v_min.y);
     i32 max_x = round_f32_to_i32(v_max.x);
@@ -79,11 +140,19 @@ void draw_rectangle(GameOffscreenBuffer *buffer, Vec2 v_min, Vec2 v_max, f32 r, 
         | (round_f32_to_u32(g * 255.0) << 8)
         | (round_f32_to_u32(b * 255.0) << 0);
     
-    u8 *row = (u8 *)(buffer->memory + ((min_x * buffer->bytes_per_pixel) + (min_y * buffer->pitch)));
+    u8 *row = (u8 *)buffer->memory + min_x * buffer->bytes_per_pixel + min_y * buffer->pitch;
+
+    for (i32 y = min_y; y < max_y; y++) {
+        u32 *pixel = (u32 *)row;
+        for (i32 x = min_x; x < max_x; x++) {
+            *pixel = color;
+            pixel += 1;
+        }
+        row += buffer->pitch;
+    }
 }
 
-void
-game_update_and_render(ThreadContext *thread, GameOffscreenBuffer *buffer, GameInput *input, GameMemory *memory) {
+extern "C" GAME_UPDATE_AND_RENDER(game_update_and_render) {
     // TODO: assert len(input.controllers[0].button_state.buttons) ==
     assert(sizeof(GameState) <= memory->permanent_storage_size);
 
@@ -93,7 +162,7 @@ game_update_and_render(ThreadContext *thread, GameOffscreenBuffer *buffer, GameI
     GameState *game_state = (GameState *)memory->permanent_storage;
 
     if (!memory->is_initialized) {
-        game_state->backdrop = debug_load_bmp(thread, &memory->debug_platform_read_entire_file, str8_lit("../test/test_background.bmp"));
+        game_state->backdrop = debug_load_bmp(thread, memory->debug_platform_read_entire_file, str8_lit("../test/test_background.bmp"));
 
         game_state->player_p.abs_tile_x = 3;
         game_state->player_p.abs_tile_y = 3;
@@ -286,7 +355,7 @@ game_update_and_render(ThreadContext *thread, GameOffscreenBuffer *buffer, GameI
             }
 
             if (dd_player.x != 0.0 && dd_player.y != 0.0) {
-                dd_player = vec2_mul(dd_player, 0.707106781); // Sqrt(0.5) = 0.707106781
+                dd_player = dd_player * 0.707106781; // Sqrt(0.5) = 0.707106781
             }
 
             // Walking Speed
@@ -294,17 +363,17 @@ game_update_and_render(ThreadContext *thread, GameOffscreenBuffer *buffer, GameI
             if (controller->back.ended_down) {
                 player_speed *= 3.0;
             }
-            dd_player = vec2_mul(dd_player, player_speed);
+            dd_player = dd_player * player_speed;
 
-            dd_player = vec2_add(dd_player, vec2_mul(vec2_neg(game_state->d_player_p), 3.5));
+            dd_player = dd_player + (-game_state->d_player_p) * 3.5;
 
             TileMapPosition new_player_p = game_state->player_p;
             // 1/2 * a * dt + v * dt + p
-            Vec2 t1 = vec2_mul(vec2_mul(dd_player, 0.5), square(input->dt_for_frame));
-            Vec2 t2 = vec2_mul(game_state->d_player_p, input->dt_for_frame);
-            new_player_p.offset = vec2_add(vec2_add(t1, t2), new_player_p.offset);
+            new_player_p.offset = dd_player * 0.5 * square(input->dt_for_frame) 
+                + game_state->d_player_p * input->dt_for_frame 
+                + new_player_p.offset;
 
-            game_state->d_player_p = vec2_add(vec2_mul(dd_player, input->dt_for_frame), game_state->d_player_p);
+            game_state->d_player_p = dd_player * input->dt_for_frame + game_state->d_player_p;
 
             new_player_p = recanonicalize_position(tile_map, new_player_p);
 
@@ -349,8 +418,7 @@ game_update_and_render(ThreadContext *thread, GameOffscreenBuffer *buffer, GameI
                 if (col_p.abs_tile_y > game_state->player_p.abs_tile_y) {
                     r = vec2(0.0, -1.0);
                 }
-                Vec2 t1 = vec2_mul(vec2_mul(r, vec2_dot(game_state->d_player_p, r)), 1.0);
-                game_state->d_player_p = vec2_sub(game_state->d_player_p, t1);
+                game_state->d_player_p = game_state->d_player_p - r * vec2_dot(game_state->d_player_p, r) * 1.0;
             }
             else {
                 if (!are_on_same_tile(&game_state->player_p, &new_player_p)) {
@@ -379,8 +447,7 @@ game_update_and_render(ThreadContext *thread, GameOffscreenBuffer *buffer, GameI
     );
 
     // Draw background
-    // draw_bitmap(buffer, &game_state.backdrop, 0.0, 0.0, 0, 0);
-
+    draw_bitmap(buffer, &game_state->backdrop, 0.0, 0.0, 0, 0);
 }
 
 void

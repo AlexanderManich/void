@@ -132,9 +132,14 @@ struct ThreadContext {
     i32 placeholder;
 };
 
-typedef String8 (*DebugPlatformReadEntireFile)(ThreadContext *thread, String8 file_name); 
-typedef void (*DebugPlatformWriteEntireFile)(ThreadContext *thread, String8 file_name, void *memory, u32 memory_size); 
-typedef void (*DebugPlatformFreeFileMemory)(ThreadContext *thread, void *memory); 
+#define DEBUG_PLATFORM_READ_ENTIRE_FILE(name) String8 name(ThreadContext *thread, String8 file_name)
+typedef DEBUG_PLATFORM_READ_ENTIRE_FILE(DebugPlatformReadEntireFile);
+
+#define DEBUG_PLATFORM_WRITE_ENTIRE_FILE(name) void name(ThreadContext *thread, String8 file_name, void *memory, u32 memory_size)
+typedef DEBUG_PLATFORM_WRITE_ENTIRE_FILE(DebugPlatformWriteEntireFile);
+
+#define DEBUG_PLATFORM_FREE_FILE_MEMORY(name) void name(ThreadContext *thread, void *memory)
+typedef DEBUG_PLATFORM_FREE_FILE_MEMORY(DebugPlatformFreeFileMemory);
 
 typedef struct GameMemory GameMemory;
 struct GameMemory {
@@ -146,9 +151,9 @@ struct GameMemory {
     u64 transient_storage_size;
     void *transient_storage; // Required to be cleared to zero at startup
 
-    DebugPlatformReadEntireFile debug_platform_read_entire_file;
-    DebugPlatformFreeFileMemory debug_platform_free_file_memory;
-    DebugPlatformWriteEntireFile debug_platform_write_entire_file;
+    DebugPlatformReadEntireFile *debug_platform_read_entire_file;
+    DebugPlatformFreeFileMemory *debug_platform_free_file_memory;
+    DebugPlatformWriteEntireFile *debug_platform_write_entire_file;
 };
 
 

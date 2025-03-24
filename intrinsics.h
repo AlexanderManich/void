@@ -1,3 +1,5 @@
+#pragma once
+
 #include "math.h"
 
 typedef struct BitScanResult BitScanResult;
@@ -6,7 +8,7 @@ struct BitScanResult {
     u32 index;
 };
 
-BitScanResult find_least_significant_set_bit(u32 value) {
+inline BitScanResult find_least_significant_set_bit(u32 value) {
     BitScanResult result = {};
 
     if (value != 0) {

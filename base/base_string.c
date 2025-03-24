@@ -1,3 +1,5 @@
+#include "base_string.h"
+
 u64 calc_cstring_length(char *cstr) {
     u64 i = 0;
     for(; cstr[i]; i += 1);

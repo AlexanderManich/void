@@ -1,5 +1,6 @@
-#include "tile.h"
 #include "../base/base_include.h"
+#include "tile.h"
+#include "../intrinsics.h"
 
 TileChunkPosition get_chunk_pos_for(TileMap *tile_map, u32 abs_tile_x, u32 abs_tile_y, u32 abs_tile_z) {
     TileChunkPosition result = {};
