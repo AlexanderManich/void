@@ -6,7 +6,7 @@ TileChunkPosition get_chunk_pos_for(TileMap *tile_map, u32 abs_tile_x, u32 abs_t
     TileChunkPosition result = {};
     result.tile_chunk_x = abs_tile_x >> tile_map->chunk_shift;
     result.tile_chunk_y = abs_tile_y >> tile_map->chunk_shift;
-    result.tile_chunk_z = abs_tile_z >> tile_map->chunk_shift;
+    result.tile_chunk_z = abs_tile_z;
     result.rel_tile_x = abs_tile_x & tile_map->chunk_mask;
     result.rel_tile_y = abs_tile_y & tile_map->chunk_mask;
 
@@ -38,7 +38,7 @@ void set_tile_value_unchecked(TileMap *tile_map, TileChunk *tile_chunk, u32 tile
     *(tile_chunk->tiles + (tile_y * tile_map->chunk_dim + tile_x)) = tile_value;
 }
 
-void _set_tile_value(TileMap *tile_map, TileChunk *tile_chunk, u32 test_tile_x, u32 test_tile_y, u32 tile_value) {
+void set_tile_value(TileMap *tile_map, TileChunk *tile_chunk, u32 test_tile_x, u32 test_tile_y, u32 tile_value) {
     if (tile_chunk->tiles) {
         set_tile_value_unchecked(tile_map, tile_chunk, test_tile_x, test_tile_y, tile_value);
     }
@@ -61,7 +61,7 @@ void set_tile_value(Arena *arena, TileMap *tile_map, u32 abs_tile_x, u32 abs_til
         }
     }
 
-    _set_tile_value(tile_map, tile_chunk, chunk_pos.rel_tile_x, chunk_pos.rel_tile_y, tile_value);
+    set_tile_value(tile_map, tile_chunk, chunk_pos.rel_tile_x, chunk_pos.rel_tile_y, tile_value);
 }
 
 u32 get_tile_value_unchecked(TileMap *tile_map, TileChunk *tile_chunk, u32 tile_x, u32 tile_y) {

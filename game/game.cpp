@@ -6,6 +6,7 @@
 
 #include "../base/base_include.c"
 #include "tile.cpp"
+#include <stdio.h>
 
 LoadedBitmap 
 debug_load_bmp(ThreadContext *thread, DebugPlatformReadEntireFile *read_entire_file, String8 file_name) {
@@ -260,6 +261,9 @@ extern "C" GAME_UPDATE_AND_RENDER(game_update_and_render) {
                 door_top = true;
             }
 
+            printf("Screen (%u, %u, %u): Doors - Left: %d, Right: %d, Top: %d, Bottom: %d, AbsTileZ: %u\n",
+                   screen_x, screen_y, abs_tile_z, door_left, door_right, door_top, door_bottom, abs_tile_z);
+
             for (u32 tile_y = 0; tile_y < tiles_per_height; tile_y++) {
                 for (u32 tile_x = 0; tile_x < tiles_per_width; tile_x++) {
                     u32 abs_tile_x = (screen_x * tiles_per_width) + tile_x;
@@ -268,7 +272,7 @@ extern "C" GAME_UPDATE_AND_RENDER(game_update_and_render) {
                     u32 tile_value = 1;
 
                     if (tile_x == 0 && (!door_left || tile_y != tiles_per_height / 2)) {
-                        tile_value = 1;
+                        tile_value = 2;
                     }
                     if (tile_x == (tiles_per_width - 1) && (!door_right || tile_y != tiles_per_height / 2)) {
                         tile_value = 2;
@@ -317,7 +321,7 @@ extern "C" GAME_UPDATE_AND_RENDER(game_update_and_render) {
             if (random_choice == 2) {
                 if (abs_tile_z == 0) {
                     abs_tile_z = 1;
-                }
+                } 
                 else {
                     abs_tile_z = 0;
                 }
@@ -399,7 +403,7 @@ extern "C" GAME_UPDATE_AND_RENDER(game_update_and_render) {
 
             b32 collided = false;
             TileMapPosition col_p = {};
-
+            
             if (!is_tile_map_point_empty(tile_map, new_player_p)) {
                 col_p = new_player_p;
                 collided = true;
@@ -483,20 +487,19 @@ extern "C" GAME_UPDATE_AND_RENDER(game_update_and_render) {
                     gray = 0.25;
                 }
 
-                if (column == game_state->camera_p.abs_tile_x && row == game_state->camera_p.abs_tile_z) {
+                if (column == game_state->camera_p.abs_tile_x && row == game_state->camera_p.abs_tile_y) {
                     gray = 0.0;
                 }
 
                 Vec2 tile_side = vec2(0.5 * (f32)tile_side_in_pixels, 0.5 * (f32)tile_side_in_pixels);
 
-                Vec2 cen = vec2(screen_center_x - meters_to_pixels * game_state->camera_p.offset.x + rel_column * tile_side_in_pixels,
-                                screen_center_y + meters_to_pixels * game_state->camera_p.offset.y - (rel_row * tile_side_in_pixels));
+                Vec2 cen = vec2(screen_center_x - meters_to_pixels * game_state->camera_p.offset.x + (f32)(rel_column * tile_side_in_pixels),
+                                screen_center_y + meters_to_pixels * game_state->camera_p.offset.y - (f32)(rel_row * tile_side_in_pixels));
                 
                 Vec2 min = cen - tile_side;
                 Vec2 max = cen + tile_side;
                 
                 draw_rectangle(buffer, min, max, gray, gray, gray);
-
             }
         }
     }
