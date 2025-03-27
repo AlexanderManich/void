@@ -519,7 +519,6 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
     u64 global_arena_size = MB(1);
     u8 global_arena_buffer[global_arena_size];
     Arena global_arena = {};
-
     arena_init(&global_arena, global_arena_buffer, global_arena_size);
 
     Win32State win32_state = {};

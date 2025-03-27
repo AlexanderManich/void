@@ -91,7 +91,6 @@ void draw_bitmap(GameOffscreenBuffer *buffer, LoadedBitmap *bitmap, f32 real_x, 
         u32 *dest = (u32 *)dest_row;
         u32 *source = source_row;
         for (i32 x = min_x; x < max_x; x++) {
-            // *dest = *source;
             f32 a  = (f32)((*source >> 24) & 0xFF) / 255.0;
             f32 sr = (f32)((*source >> 16) & 0xFF);
             f32 sg = (f32)((*source >> 8)  & 0xFF);
@@ -163,6 +162,19 @@ extern "C" GAME_UPDATE_AND_RENDER(game_update_and_render) {
 
     if (!memory->is_initialized) {
         game_state->backdrop = debug_load_bmp(thread, memory->debug_platform_read_entire_file, str8_lit("../test/test_background.bmp"));
+
+        game_state->hero_bitmaps[0] = HeroBitmaps{
+            .align_x = 22,
+            .align_y = 56,
+            .whole_player = debug_load_bmp(thread, memory->debug_platform_read_entire_file, str8_lit("../test/player.bmp")),
+            .cape = 0,
+        };
+        game_state->hero_bitmaps[1] = HeroBitmaps{
+            .align_x = 22,
+            .align_y = 56,
+            .whole_player = debug_load_bmp(thread, memory->debug_platform_read_entire_file, str8_lit("../test/player_cape_front.bmp")),
+            .cape = 0,
+        };
 
         game_state->player_p.abs_tile_x = 3;
         game_state->player_p.abs_tile_y = 3;
@@ -250,13 +262,13 @@ extern "C" GAME_UPDATE_AND_RENDER(game_update_and_render) {
 
             for (u32 tile_y = 0; tile_y < tiles_per_height; tile_y++) {
                 for (u32 tile_x = 0; tile_x < tiles_per_width; tile_x++) {
-                    u32 abs_tile_x = (screen_x * tiles_per_height) + tile_x;
-                    u32 abs_tile_y = (screen_y * tiles_per_width) + tile_y;
+                    u32 abs_tile_x = (screen_x * tiles_per_width) + tile_x;
+                    u32 abs_tile_y = (screen_y * tiles_per_height) + tile_y;
 
                     u32 tile_value = 1;
 
                     if (tile_x == 0 && (!door_left || tile_y != tiles_per_height / 2)) {
-                        tile_value = 2;
+                        tile_value = 1;
                     }
                     if (tile_x == (tiles_per_width - 1) && (!door_right || tile_y != tiles_per_height / 2)) {
                         tile_value = 2;
@@ -350,7 +362,7 @@ extern "C" GAME_UPDATE_AND_RENDER(game_update_and_render) {
                 dd_player.x = -1.0;
             }
             if (controller->move_right.ended_down) {
-                game_state->hero_facing_direction = 0;
+                game_state->hero_facing_direction = 1;
                 dd_player.x = 1.0;
             }
 
@@ -359,7 +371,7 @@ extern "C" GAME_UPDATE_AND_RENDER(game_update_and_render) {
             }
 
             // Walking Speed
-            f32 player_speed = 100.0; // meters/second^2
+            f32 player_speed = 10.0; // meters/second^2
             if (controller->back.ended_down) {
                 player_speed *= 3.0;
             }
@@ -394,12 +406,12 @@ extern "C" GAME_UPDATE_AND_RENDER(game_update_and_render) {
             }
 
             if (!is_tile_map_point_empty(tile_map, player_left)) {
-                col_p = new_player_p;
+                col_p = player_left;
                 collided = true;
             }
 
             if (!is_tile_map_point_empty(tile_map, player_right)) {
-                col_p = new_player_p;
+                col_p = player_right;
                 collided = true;
             }
 
@@ -447,7 +459,71 @@ extern "C" GAME_UPDATE_AND_RENDER(game_update_and_render) {
     );
 
     // Draw background
-    draw_bitmap(buffer, &game_state->backdrop, 0.0, 0.0, 0, 0);
+    // draw_bitmap(buffer, &game_state->backdrop, 0.0, 0.0, 0, 0);
+
+    // Draw screen
+    f32 screen_center_x = 0.5 * (f32)buffer->width;
+    f32 screen_center_y = 0.5 * (f32)buffer->height;
+
+    for (i32 rel_row = -100; rel_row < 100; rel_row++) {
+        for (i32 rel_column = -200; rel_column < 200; rel_column++) {
+            u32 column = game_state->player_p.abs_tile_x + rel_column;
+            u32 row = game_state->camera_p.abs_tile_y + rel_row;
+            
+            u32 tile_id = get_tile_value(tile_map, column, row, game_state->camera_p.abs_tile_z);
+
+            if (tile_id > 1) {
+                f32 gray = 0.5;
+
+                if (tile_id == 2) {
+                    gray = 1.0;
+                }
+
+                if (tile_id > 2) {
+                    gray = 0.25;
+                }
+
+                if (column == game_state->camera_p.abs_tile_x && row == game_state->camera_p.abs_tile_z) {
+                    gray = 0.0;
+                }
+
+                Vec2 tile_side = vec2(0.5 * (f32)tile_side_in_pixels, 0.5 * (f32)tile_side_in_pixels);
+
+                Vec2 cen = vec2(screen_center_x - meters_to_pixels * game_state->camera_p.offset.x + rel_column * tile_side_in_pixels,
+                                screen_center_y + meters_to_pixels * game_state->camera_p.offset.y - (rel_row * tile_side_in_pixels));
+                
+                Vec2 min = cen - tile_side;
+                Vec2 max = cen + tile_side;
+                
+                draw_rectangle(buffer, min, max, gray, gray, gray);
+
+            }
+        }
+    }
+
+    // camera stuff that we might need? for now just scroll the screen.
+    // Vec2 diff = subtract(tile_map, &game_state.player_p, &game_state.camera_p);
+
+    f32 player_ground_point_x = screen_center_x;
+    f32 player_ground_point_y = screen_center_y;
+
+    Vec2 player_left_top = vec2(player_ground_point_x - 0.5 * player_width * meters_to_pixels,
+                                player_ground_point_y - player_height * meters_to_pixels);
+        
+    Vec2 player_width_height = vec2(player_width, player_height);
+
+    // Draw player
+    draw_rectangle(buffer, player_left_top, player_left_top + meters_to_pixels * player_width_height, 1.0, 0.0, 0.0);
+
+    HeroBitmaps *hero_bitmaps = &game_state->hero_bitmaps[game_state->hero_facing_direction];
+
+    draw_bitmap(buffer, &hero_bitmaps->whole_player, 
+                player_ground_point_x, player_ground_point_y, 
+                hero_bitmaps->align_x, hero_bitmaps->align_y);
+        
+    draw_bitmap(buffer, &hero_bitmaps->cape, 
+                player_ground_point_x, player_ground_point_y,
+                hero_bitmaps->align_x, hero_bitmaps->align_y);
 }
 
 void
