@@ -6,7 +6,6 @@
 
 #include "../base/base_include.c"
 #include "tile.cpp"
-#include <stdio.h>
 
 LoadedBitmap 
 debug_load_bmp(ThreadContext *thread, DebugPlatformReadEntireFile *read_entire_file, String8 file_name) {
@@ -260,9 +259,6 @@ extern "C" GAME_UPDATE_AND_RENDER(game_update_and_render) {
             else {
                 door_top = true;
             }
-
-            printf("Screen (%u, %u, %u): Doors - Left: %d, Right: %d, Top: %d, Bottom: %d, AbsTileZ: %u\n",
-                   screen_x, screen_y, abs_tile_z, door_left, door_right, door_top, door_bottom, abs_tile_z);
 
             for (u32 tile_y = 0; tile_y < tiles_per_height; tile_y++) {
                 for (u32 tile_x = 0; tile_x < tiles_per_width; tile_x++) {
