@@ -151,6 +151,32 @@ draw_rectangle(GameOffscreenBuffer *buffer, Vec2 v_min, Vec2 v_max, f32 r, f32 g
     }
 }
 
+void game_output_sound(GameState *game_state, GameSoundOutputBuffer *sound_buffer, u32 tone_hz) {
+    f32 tone_volume = 0.0; 
+    u32 wave_period = sound_buffer->samples_per_second / tone_hz;
+
+    i16 *sample_out = sound_buffer->samples;
+    for (u32 i = 0; i < sound_buffer->sample_count; i++) {
+        // f32 sine_value = sin(game_state.t_sine);
+        // i16 sample_value = (i16)(sine_value * tone_volume);
+        i16 sample_value = 0;
+        *sample_out = sample_value;
+        sample_out += 1;
+        *sample_out = sample_value;
+        sample_out += 1;
+
+        // game_state.t_sine += 2.0 * PI / (f32)wave_period;
+        // if (game_state.t_sine > 2.0 * PI) {
+        //     game_state.t_sine -= 2.0 * PI;
+        // }
+    }
+}
+
+extern "C" GAME_GET_SOUND_SAMPLES(game_get_sound_samples) {
+    GameState *game_state = (GameState *)memory->permanent_storage;
+    game_output_sound(game_state, sound_buffer, 400);
+}
+
 extern "C" GAME_UPDATE_AND_RENDER(game_update_and_render) {
     // TODO: assert len(input.controllers[0].button_state.buttons) ==
     assert(sizeof(GameState) <= memory->permanent_storage_size);
@@ -459,7 +485,7 @@ extern "C" GAME_UPDATE_AND_RENDER(game_update_and_render) {
     );
 
     // Draw background
-    // draw_bitmap(buffer, &game_state->backdrop, 0.0, 0.0, 0, 0);
+    draw_bitmap(buffer, &game_state->backdrop, 0.0, 0.0, 0, 0);
 
     // Draw screen
     f32 screen_center_x = 0.5 * (f32)buffer->width;

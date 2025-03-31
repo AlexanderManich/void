@@ -135,11 +135,11 @@ win32_fill_sound_buffer(Win32SoundOutput *sound_output, u32 byte_to_lock, u32 by
 
     for (u32 i = 0; i < region1_sample_count; i++) {
         *dest_sample = *source_sample;
-        source_sample = dest_sample + 1;
-        dest_sample = source_sample + 1;
+        source_sample += 1;
+        dest_sample += 1; 
         *dest_sample = *source_sample;
-        source_sample = dest_sample + 1;
-        dest_sample = source_sample + 1;
+        source_sample += 1;
+        dest_sample += 1; 
         sound_output->running_sample_index++;
     }
 
@@ -280,6 +280,54 @@ win32_get_exe_file_name(Arena *arena, Win32State *state) {
     state->exe_dir_path = str8_last_slash_prefix(string);
 }
 
+// void
+// win32_build_exe_path_file_name(Arena *arena, Win32State *state, String8 file_name, String8 *dest) {
+    
+// }
+
+// void win32_get_input_file_location(Win32State *state, u32 slot_index, String8 *dest) {
+//     assert(slot_index == 1);
+//     win32_build_exe_path_file_name(state, str8_lit("loop_playback.pb"), dest);
+// }
+
+void
+win32_get_replay_buffer(Win32State *state, u32 index, Win32ReplayBuffer *replay_buffer) {
+    assert(index < array_count(state->replay_buffers));
+
+    Win32ReplayBuffer *buffer = &state->replay_buffers[index];
+    replay_buffer->memory_block = buffer->memory_block;
+    replay_buffer->replay_file_name = buffer->replay_file_name;
+}
+
+void
+win32_record_input(Win32State *win32_state, GameInput *new_input) {
+    u32 bytes_written = 0;
+    u32 memory_size = sizeof(GameInput);
+    u8 *write_buffer = (u8 *)new_input;
+    
+    if (WriteFile(win32_state->recording_handle, write_buffer, memory_size, (LPDWORD)(&bytes_written), 0)) {
+        assert(bytes_written == memory_size);
+    }
+    else {
+        // Logging
+    }
+}
+
+void
+win32_begin_recording_input(Win32State *state, u32 input_recording_index) {
+    assert(input_recording_index < array_count(state->replay_buffers));
+
+    Win32ReplayBuffer replay_buffer = {};
+    win32_get_replay_buffer(state, input_recording_index, &replay_buffer);
+
+    if (replay_buffer.memory_block) {
+        state->input_recording_index = input_recording_index;
+
+        String8 file_name = {};
+        // win32_get_input_file_location(state, input_recording_index, *file_name);
+    }
+}
+
 void 
 win32_process_pending_messages(Win32State *win32_state, GameControllerInput *keyboard_controller) {
     MSG message = {};
@@ -330,6 +378,20 @@ win32_process_pending_messages(Win32State *win32_state, GameControllerInput *key
                             );
                             break;
                         }
+                        case 'Q': {
+                            win32_process_keyboard_message(
+                                &keyboard_controller->right_shoulder,
+                                is_down
+                            );
+                            break;
+                        }
+                        case 'E': {
+                            win32_process_keyboard_message(
+                                &keyboard_controller->left_shouder,
+                                is_down
+                            );
+                            break;
+                        }
                         case 'P': {
                             if (is_down) {
                                 GLOBAL_PAUSE = !GLOBAL_PAUSE;
@@ -344,6 +406,14 @@ win32_process_pending_messages(Win32State *win32_state, GameControllerInput *key
                                     }
                                 }
                             }
+                            break;
+                        }
+                        case VK_ESCAPE: {
+                            win32_process_keyboard_message(&keyboard_controller->start, is_down);
+                            break;
+                        }
+                        case VK_SPACE: {
+                            win32_process_keyboard_message(&keyboard_controller->back, is_down);
                             break;
                         }
                         case VK_RETURN: {
@@ -699,9 +769,13 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
                         buffer.pitch = GLOBAL_BACKBUFFER.pitch;
                         buffer.bytes_per_pixel = GLOBAL_BACKBUFFER.bytes_per_pixel;
 
-                        // if (win32_state.input_recording_index == 1) {
+                        if (win32_state.input_recording_index == 1) {
+                            win32_record_input(&win32_state, new_input);
+                        }
 
-                        // }
+                        if (win32_state.input_playing_index == 1) {
+                            // win32_playback_input(&win32_state, new_input);
+                        }
                         
                         ThreadContext thread = {};
 
@@ -769,9 +843,9 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
                         sound_buffer.sample_count = bytes_to_write / sound_output.bytes_per_sample;
                         sound_buffer.samples = samples;
 
-                        // if (game.get_sound_samples) {
-                        //     (*game.get_sound_samples)(&thread, &game_memory, &sound_buffer);
-                        // }
+                        if (game.get_sound_samples) {
+                            (*game.get_sound_samples)(&thread, &game_memory, &sound_buffer);
+                        }
 
                         #if INTERNAL 
                         {
@@ -796,7 +870,7 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
                         }
                         #endif // INTERNAL 
                         
-                        // win32_fill_sound_buffer(&sound_output, byte_to_lock, bytes_to_write, sound_buffer);
+                        win32_fill_sound_buffer(&sound_output, byte_to_lock, bytes_to_write, sound_buffer);
 
                         u32 work_counter = win32_get_wall_clock();
                         f32 work_seconds_elapsed = win32_get_seconds_elapsed(last_counter, work_counter);

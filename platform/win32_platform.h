@@ -16,7 +16,7 @@ struct Win32DebugTimeMarker {
 // Replay
 typedef struct Win32ReplayBuffer Win32ReplayBuffer;
 struct Win32ReplayBuffer {
-    char *replay_file_name;
+    String8 replay_file_name;
     void *memory_block;
 };
 
