@@ -5,6 +5,7 @@
 #include <intrin.h>
 #include <windows.h>
 #include <dsound.h>
+#include <XInput.h> 
 #include "../base/base_include.h"
 #include "../intrinsics.h"
 #include "../game/tile.h"
@@ -18,6 +19,7 @@ b32 GLOBAL_PAUSE = false;
 i64 PERF_COUNTER_FREQ;
 Win32OffscreenBuffer GLOBAL_BACKBUFFER;
 LPDIRECTSOUNDBUFFER GLOBAL_SECONDARY_BUFFER;
+Arena GLOBAL_ARENA;
 
 Win32WindowDimension
 win32_get_window_dimension(HWND window) {
@@ -256,6 +258,17 @@ win32_process_keyboard_message(GameButtonState *new_state, b32 is_down) {
     }
 }
 
+void
+win32_process_xinput_digital_button(u32 xinput_button_state, GameButtonState old_state, u32 button_bit, GameButtonState new_state) {
+    new_state.ended_down = (xinput_button_state & button_bit) == button_bit;
+
+    if (old_state.ended_down != new_state.ended_down) {
+        new_state.half_transition_count = 1;
+    } else {
+        new_state.half_transition_count = 0;
+    }
+}
+
 u32 
 win32_get_wall_clock() {
     LARGE_INTEGER result = {};
@@ -280,15 +293,15 @@ win32_get_exe_file_name(Arena *arena, Win32State *state) {
     state->exe_dir_path = str8_last_slash_prefix(string);
 }
 
-// void
-// win32_build_exe_path_file_name(Arena *arena, Win32State *state, String8 file_name, String8 *dest) {
-    
-// }
+void
+win32_build_exe_path_file_name(Arena *arena, Win32State *state, String8 file_name, String8 *dest) {
+    *dest = str8_concat(arena, state->exe_dir_path, file_name);
+}
 
-// void win32_get_input_file_location(Win32State *state, u32 slot_index, String8 *dest) {
-//     assert(slot_index == 1);
-//     win32_build_exe_path_file_name(state, str8_lit("loop_playback.pb"), dest);
-// }
+void win32_get_input_file_location(Arena *arena, Win32State *state, u32 slot_index, String8 *dest) {
+    assert(slot_index == 1);
+    win32_build_exe_path_file_name(arena, state, str8_lit("/loop_playback.pb"), dest);
+}
 
 void
 win32_get_replay_buffer(Win32State *state, u32 index, Win32ReplayBuffer *replay_buffer) {
@@ -324,8 +337,102 @@ win32_begin_recording_input(Win32State *state, u32 input_recording_index) {
         state->input_recording_index = input_recording_index;
 
         String8 file_name = {};
-        // win32_get_input_file_location(state, input_recording_index, *file_name);
+        
+        TempArena scratch = temp_begin(&GLOBAL_ARENA);
+        win32_get_input_file_location(scratch.arena, state, input_recording_index, &file_name);
+
+        state->recording_handle = CreateFileA(
+            (char *)file_name.str,
+            GENERIC_WRITE,
+            0,
+            0,
+            CREATE_ALWAYS,
+            0,
+            0
+        );
+
+        temp_end(scratch);
+
+        u32 bytes_to_write = state->total_size;
+
+        assert(state->total_size = bytes_to_write);
+
+        LARGE_INTEGER file_position = {};
+        file_position.QuadPart = state->total_size;
+        if (!SetFilePointerEx(state->recording_handle, file_position, 0, FILE_BEGIN)) {
+            // Logging
+        }
+
+        CopyMemory(replay_buffer.memory_block, state->game_memory_block, state->total_size);
     }
+}
+
+void win32_end_recording_input(Win32State *win32_state) {
+    CloseHandle(win32_state->recording_handle);
+    win32_state->input_recording_index = 0;
+}
+
+void win32_begin_input_playback(Win32State *state, u64 input_playing_index) {
+    Win32ReplayBuffer replay_buffer = {};
+    win32_get_replay_buffer(state, input_playing_index, &replay_buffer);
+
+    if (replay_buffer.memory_block) {
+        state->input_playing_index = input_playing_index;
+
+        String8 file_name = {};
+
+        TempArena scratch = temp_begin(&GLOBAL_ARENA);
+        win32_get_input_file_location(scratch.arena, state, input_playing_index, &file_name);
+
+        state->playback_handle = CreateFileA(
+            (char *)file_name.str,
+            GENERIC_READ,
+            FILE_SHARE_READ,
+            0,
+            OPEN_EXISTING,
+            0,
+            0
+        );
+
+        temp_end(scratch);
+
+        LARGE_INTEGER file_position = {};
+        file_position.QuadPart = state->total_size;
+        if (!SetFilePointerEx(state->playback_handle, file_position, 0, FILE_BEGIN)) {
+            // Logging
+        }
+
+        CopyMemory(state->game_memory_block, replay_buffer.memory_block, state->total_size);
+    }
+}
+
+void win32_end_input_playback(Win32State *state) {
+    CloseHandle(state->playback_handle);
+    state->input_playing_index = 0;
+}
+
+void win32_playback_input(Win32State *state, GameInput *new_input) {
+    u32 bytes_read = 0;
+    u64 memory_size = sizeof(GameInput);
+
+    if (ReadFile(state->playback_handle, new_input, sizeof(*new_input), (LPDWORD)&bytes_read, 0)) {
+        if (bytes_read == 0) {
+            u64 playing_index = state->input_playing_index;
+            win32_end_input_playback(state);
+            win32_begin_input_playback(state, playing_index);
+            ReadFile(state->playback_handle, new_input, sizeof(*new_input), (LPDWORD)&bytes_read, 0);
+        }
+    }
+}
+
+f32 win32_process_input_stick_value(i16 value, u16 dead_zone_threshold) {
+    f32 x = 0.0;
+    if (value < -dead_zone_threshold) {
+        x = (f32)(value + dead_zone_threshold) / (32760.0 - (f32)dead_zone_threshold);
+    } else if (value > dead_zone_threshold) {
+        x = (f32)(value - dead_zone_threshold) / (32767.0 - (f32)dead_zone_threshold);
+    }
+    return x;
 }
 
 void 
@@ -387,7 +494,7 @@ win32_process_pending_messages(Win32State *win32_state, GameControllerInput *key
                         }
                         case 'E': {
                             win32_process_keyboard_message(
-                                &keyboard_controller->left_shouder,
+                                &keyboard_controller->left_shoulder,
                                 is_down
                             );
                             break;
@@ -402,8 +509,13 @@ win32_process_pending_messages(Win32State *win32_state, GameControllerInput *key
                             if (is_down) {
                                 if (win32_state->input_playing_index == 0) {
                                     if (win32_state->input_recording_index == 0) {
-                                        // win32_begin_recording_input(win32_state, 1);
+                                        win32_begin_recording_input(win32_state, 1);
+                                    } else {
+                                        win32_end_recording_input(win32_state);
+                                        win32_begin_input_playback(win32_state, 1);
                                     }
+                                } else {
+                                    win32_end_input_playback(win32_state);
                                 }
                             }
                             break;
@@ -588,16 +700,15 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
 
     u64 global_arena_size = MB(1);
     u8 global_arena_buffer[global_arena_size];
-    Arena global_arena = {};
-    arena_init(&global_arena, global_arena_buffer, global_arena_size);
+    arena_init(&GLOBAL_ARENA, global_arena_buffer, global_arena_size);
 
     Win32State win32_state = {};
 
-    win32_get_exe_file_name(&global_arena, &win32_state);
+    win32_get_exe_file_name(&GLOBAL_ARENA, &win32_state);
 
-    String8 source_game_code_dll_full_path = str8_concat(&global_arena, win32_state.exe_dir_path, str8_lit("\\game.dll"));
+    String8 source_game_code_dll_full_path = str8_concat(&GLOBAL_ARENA, win32_state.exe_dir_path, str8_lit("\\game.dll"));
 
-    String8 temp_game_code_dll_full_path = str8_concat(&global_arena, win32_state.exe_dir_path, str8_lit("\\temp_game.dll"));
+    String8 temp_game_code_dll_full_path = str8_concat(&GLOBAL_ARENA, win32_state.exe_dir_path, str8_lit("\\temp_game.dll"));
 
     i32 desired_scheduler_ms = 1;
     b32 sleep_is_granular = timeBeginPeriod(desired_scheduler_ms) != TIMERR_NOERROR;
@@ -686,16 +797,17 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
 
             game_memory.permanent_storage = win32_state.game_memory_block;
             game_memory.transient_storage = ((u8 *)game_memory.permanent_storage + game_memory.permanent_storage_size);
+
             for (u64 i = 0; i < array_count(win32_state.replay_buffers); i++) {
-                Win32ReplayBuffer replay_buffer = win32_state.replay_buffers[i];
-                replay_buffer.memory_block = VirtualAlloc(
+                Win32ReplayBuffer *replay_buffer = &win32_state.replay_buffers[i];
+                replay_buffer->memory_block = VirtualAlloc(
                     0,
                     win32_state.total_size,
                     MEM_RESERVE | MEM_COMMIT,
                     PAGE_READWRITE
                 );
 
-                assert(replay_buffer.memory_block);
+                assert(replay_buffer->memory_block);
             }
 
             if (samples && game_memory.permanent_storage && game_memory.transient_storage) {
@@ -754,12 +866,157 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
                         new_input->mouse_x = mouse_p.x;
                         new_input->mouse_y = mouse_p.y;
                         new_input->mouse_z = 0;
+
+                        win32_process_keyboard_message(
+                            &new_input->mouse_buttons[0],
+                            (GetKeyState(VK_LBUTTON) & (1 << 15)) != 0
+                        );
+                        win32_process_keyboard_message(
+                            &new_input->mouse_buttons[1],
+                            (GetKeyState(VK_RBUTTON) & (1 << 15)) != 0
+                        );
+                        win32_process_keyboard_message(
+                            &new_input->mouse_buttons[2],
+                            (GetKeyState(VK_MBUTTON) & (1 << 15)) != 0
+                        );
+                        win32_process_keyboard_message(
+                            &new_input->mouse_buttons[3],
+                            (GetKeyState(VK_XBUTTON1) & (1 << 15)) != 0
+                        );
+                        win32_process_keyboard_message(
+                            &new_input->mouse_buttons[4],
+                            (GetKeyState(VK_XBUTTON2) & (1 << 15)) != 0
+                        );
+
+                        u32 max_controller_count = XUSER_MAX_COUNT;
                         
-                        for (u64 i = 0; i < array_count(new_input->mouse_buttons); i++) { 
-                            win32_process_keyboard_message(
-                                &new_input->mouse_buttons[i],
-                                (GetKeyState(VK_LBUTTON) & (1 << 15)) != 0
-                            );
+                        if (max_controller_count > array_count(new_input->controllers) - 1) {
+                            max_controller_count = array_count(new_input->controllers) - 1;
+                        }
+
+                        for (u32 controller_index = 0; controller_index < 0; controller_index++) {
+                            u32 our_controller_index = controller_index + 1;
+                            GameControllerInput *old_controller = get_controller(old_input, our_controller_index);
+                            GameControllerInput *new_controller = get_controller(new_input, our_controller_index);
+                            XINPUT_STATE *controller_state = {};
+
+                            if (XInputGetState(controller_index, controller_state) == ERROR_SUCCESS) {
+                                new_controller->is_connected = true;
+                                new_controller->is_analog = old_controller->is_analog;
+
+                                // Controller is plugged in
+                                XINPUT_GAMEPAD *pad = &controller_state->Gamepad;
+
+                                new_controller->stick_average_x = win32_process_input_stick_value(
+                                    pad->sThumbLX,
+                                    XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE
+                                );
+                                new_controller->stick_average_y = win32_process_input_stick_value(
+                                    pad->sThumbLY,
+                                    XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE
+                                );
+
+                                if (new_controller->stick_average_x != 0.0 || new_controller->stick_average_y != 0.0) {
+                                    new_controller->is_analog = true;
+                                }
+
+                                if (pad->wButtons & XINPUT_GAMEPAD_DPAD_UP != 0) {
+                                    new_controller->stick_average_y = 1.0;
+                                    new_controller->is_analog = false;
+                                }
+                                if (pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN != 0) {
+                                    new_controller->stick_average_y = -1.0;
+                                    new_controller->is_analog = false;
+                                }
+                                if (pad->wButtons & XINPUT_GAMEPAD_DPAD_LEFT != 0) {
+                                    new_controller->stick_average_x = -1.0;
+                                    new_controller->is_analog = false;
+                                }
+                                if (pad->wButtons & XINPUT_GAMEPAD_DPAD_UP != 0) {
+                                    new_controller->stick_average_x = 1.0;
+                                    new_controller->is_analog = false;
+                                }
+
+                                f32 threshold = 0.5;
+
+                                win32_process_xinput_digital_button(
+                                    (new_controller->stick_average_x < -threshold) ? 1 : 0,
+                                    old_controller->move_left,
+                                    1,
+                                    new_controller->move_left
+                                );
+                                win32_process_xinput_digital_button(
+                                    (new_controller->stick_average_x > threshold) ? 1 : 0,
+                                    old_controller->move_right,
+                                    1,
+                                    new_controller->move_right
+                                );
+                                win32_process_xinput_digital_button(
+                                    (new_controller->stick_average_y < -threshold) ? 1 : 0,
+                                    old_controller->move_down,
+                                    1,
+                                    new_controller->move_down
+                                );
+                                win32_process_xinput_digital_button(
+                                    (new_controller->stick_average_y > threshold) ? 1 : 0,
+                                    old_controller->move_up,
+                                    1,
+                                    new_controller->move_up
+                                );
+
+                                win32_process_xinput_digital_button(
+                                    pad->wButtons,
+                                    old_controller->action_down,
+                                    XINPUT_GAMEPAD_A,
+                                    new_controller->action_down
+                                );
+                                win32_process_xinput_digital_button(
+                                    pad->wButtons,
+                                    old_controller->action_right,
+                                    XINPUT_GAMEPAD_B,
+                                    new_controller->action_right
+                                );
+                                win32_process_xinput_digital_button(
+                                    pad->wButtons,
+                                    old_controller->action_left,
+                                    XINPUT_GAMEPAD_X,
+                                    new_controller->action_left
+                                );
+                                win32_process_xinput_digital_button(
+                                    pad->wButtons,
+                                    old_controller->action_up,
+                                    XINPUT_GAMEPAD_Y,
+                                    new_controller->action_up
+                                );
+                                
+                                win32_process_xinput_digital_button(
+                                    pad->wButtons,
+                                    old_controller->left_shoulder,
+                                    XINPUT_GAMEPAD_LEFT_SHOULDER,
+                                    new_controller->left_shoulder
+                                );
+                                win32_process_xinput_digital_button(
+                                    pad->wButtons,
+                                    old_controller->right_shoulder,
+                                    XINPUT_GAMEPAD_RIGHT_SHOULDER,
+                                    new_controller->right_shoulder
+                                );
+                                win32_process_xinput_digital_button(
+                                    pad->wButtons,
+                                    old_controller->back,
+                                    XINPUT_GAMEPAD_BACK,
+                                    new_controller->back
+                                );
+                                win32_process_xinput_digital_button(
+                                    pad->wButtons,
+                                    old_controller->start,
+                                    XINPUT_GAMEPAD_START,
+                                    new_controller->start
+                                );
+                            } else {
+                                // Controller is not available
+                                new_controller->is_connected = false;
+                            }
                         }
 
                         GameOffscreenBuffer buffer = {};
@@ -774,7 +1031,7 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
                         }
 
                         if (win32_state.input_playing_index == 1) {
-                            // win32_playback_input(&win32_state, new_input);
+                            win32_playback_input(&win32_state, new_input);
                         }
                         
                         ThreadContext thread = {};

@@ -90,7 +90,7 @@ struct GameControllerInput {
             GameButtonState action_left;
             GameButtonState action_right;
             
-            GameButtonState left_shouder;
+            GameButtonState left_shoulder;
             GameButtonState right_shoulder;
             
             GameButtonState back;
