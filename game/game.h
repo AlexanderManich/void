@@ -55,6 +55,7 @@ struct GameState {
     TileMapPosition camera_p;
     TileMapPosition player_p;
     Vec2 d_player_p;
+    f32 rotation_speed;
 
     LoadedBitmap backdrop;
 

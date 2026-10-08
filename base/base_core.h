@@ -2,6 +2,7 @@
 #define BASE_CORE_H
 
 #include <stdint.h>
+#include <string.h>
 
 #if SLOW
 #define assert(expr) if (!(expr)) {*(int *)0 = 0;}
@@ -24,9 +25,9 @@ u32 safe_u64_to_u32(u64 value);
 
 typedef int32_t b32;
 #define false 0
-#define true 1
+#define true  1
 
-#define KB(n) ((n) * 1024LL)
+#define KB(n) ((n)     * 1024LL)
 #define MB(n) ((KB(n)) * 1024LL)
 #define GB(n) ((MB(n)) * 1024LL)
 #define TB(n) ((GB(n)) * 1024LL)

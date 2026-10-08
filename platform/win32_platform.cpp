@@ -90,6 +90,7 @@ win32_init_d_sound(HWND window, i32 samples_per_second, u32 buffer_size) {
                         buffer_description.lpwfxFormat = &wave_format;
 
                         if (SUCCEEDED(direct_sound->CreateSoundBuffer(&buffer_description, &GLOBAL_SECONDARY_BUFFER, 0))) {
+
                         }
                     }
                 }
@@ -564,7 +565,7 @@ win32_resize_dib_section(Win32OffscreenBuffer *buffer, i32 width, i32 height) {
 
     buffer->info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER); 
     buffer->info.bmiHeader.biWidth = buffer->width;
-    // Negative height means the bitmap is a top-down DIB and it's origin is the upper-left corner. Rows in window go sequentially from top to bottom.
+    // Negative height means the bitmap is a top-down DIB (Device Independent Bitmap) and it's origin is the upper-left corner. Rows in window go sequentially from top to bottom.
     buffer->info.bmiHeader.biHeight = -buffer->height;
     buffer->info.bmiHeader.biPlanes = 1;
     buffer->info.bmiHeader.biBitCount = 32;
@@ -716,7 +717,7 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
     WNDCLASS window_class = {};
 
     win32_resize_dib_section(&GLOBAL_BACKBUFFER, 960, 540);
-    window_class.style = CS_HREDRAW|CS_VREDRAW;
+    window_class.style = CS_HREDRAW | CS_VREDRAW;
     window_class.hInstance = instance;
     window_class.lpfnWndProc = main_window_callback;
     window_class.hCursor = LoadCursor(0, IDC_ARROW);
@@ -839,7 +840,7 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
                     FILETIME new_dll_write_time = {};
                     FILETIME last_write_time = win32_get_last_write_time(source_game_code_dll_full_path);
                     new_dll_write_time = last_write_time;
-
+                    
                     if (CompareFileTime(&new_dll_write_time, &game.dll_last_write_time) != 0) {
                         win32_unload_game_code(&game);
                         game = win32_load_game_code(source_game_code_dll_full_path, temp_game_code_dll_full_path);
@@ -920,19 +921,19 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
                                     new_controller->is_analog = true;
                                 }
 
-                                if (pad->wButtons & XINPUT_GAMEPAD_DPAD_UP != 0) {
+                                if (pad->wButtons & (XINPUT_GAMEPAD_DPAD_UP != 0)) {
                                     new_controller->stick_average_y = 1.0;
                                     new_controller->is_analog = false;
                                 }
-                                if (pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN != 0) {
+                                if (pad->wButtons & (XINPUT_GAMEPAD_DPAD_DOWN != 0)) {
                                     new_controller->stick_average_y = -1.0;
                                     new_controller->is_analog = false;
                                 }
-                                if (pad->wButtons & XINPUT_GAMEPAD_DPAD_LEFT != 0) {
+                                if (pad->wButtons & (XINPUT_GAMEPAD_DPAD_LEFT != 0)) {
                                     new_controller->stick_average_x = -1.0;
                                     new_controller->is_analog = false;
                                 }
-                                if (pad->wButtons & XINPUT_GAMEPAD_DPAD_UP != 0) {
+                                if (pad->wButtons & (XINPUT_GAMEPAD_DPAD_UP != 0)) {
                                     new_controller->stick_average_x = 1.0;
                                     new_controller->is_analog = false;
                                 }
@@ -1127,7 +1128,7 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR command_line, int sho
                         }
                         #endif // INTERNAL 
                         
-                        win32_fill_sound_buffer(&sound_output, byte_to_lock, bytes_to_write, sound_buffer);
+                        // win32_fill_sound_buffer(&sound_output, byte_to_lock, bytes_to_write, sound_buffer);
 
                         u32 work_counter = win32_get_wall_clock();
                         f32 work_seconds_elapsed = win32_get_seconds_elapsed(last_counter, work_counter);

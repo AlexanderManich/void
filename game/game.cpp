@@ -3,11 +3,18 @@
 #include "../intrinsics.h"
 #include "tile.h"
 #include "game.h"
+#include <cstdio>
 
 #include "../base/base_include.c"
 #include "tile.cpp"
 
-LoadedBitmap 
+#define COLOR_RED   0xFF0000
+#define COLOR_GREEN 0x00FF00 
+#define COLOR_BLUE  0x0000FF
+#define COLOR_WHITE 0xFFFFFF
+#define COLOR_BLACK 0x000000
+
+LoadedBitmap
 debug_load_bmp(ThreadContext *thread, DebugPlatformReadEntireFile *read_entire_file, String8 file_name) {
     LoadedBitmap result = {};
 
@@ -17,39 +24,39 @@ debug_load_bmp(ThreadContext *thread, DebugPlatformReadEntireFile *read_entire_f
 
         BitmapHeader *header = (BitmapHeader *)read_result.str;
         u32 *contents = (u32 *)read_result.str;
-        
+
         u32 *pixels = (u32 *)((u8 *)contents + header->bitmap_offset);
-        
+
         result.pixels = pixels;
-        result.width = header->width;
+        result.width  = header->width;
         result.height = header->height;
-        
+
         assert(header->compression == 3);
-        
-        u32 red_mask = header->red_mask;
+
+        u32 red_mask   = header->red_mask;
         u32 green_mask = header->green_mask;
-        u32 blue_mask = header->blue_mask;
+        u32 blue_mask  = header->blue_mask;
         u32 alpha_mask = ~(red_mask | green_mask | blue_mask);
-        
-        BitScanResult red_shift = find_least_significant_set_bit(red_mask);
+
+        BitScanResult red_shift   = find_least_significant_set_bit(red_mask);
         BitScanResult green_shift = find_least_significant_set_bit(green_mask);
-        BitScanResult blue_shift = find_least_significant_set_bit(blue_mask);
+        BitScanResult blue_shift  = find_least_significant_set_bit(blue_mask);
         BitScanResult alpha_shift = find_least_significant_set_bit(alpha_mask);
-        
+
         assert(red_shift.found);
         assert(green_shift.found);
         assert(blue_shift.found);
         assert(alpha_shift.found);
 
         u32 *source_dest = pixels;
-        
+
         for (i32 y = 0; y < header->height; y++) {
             for (i32 x = 0; x < header->width; x++) {
                 u32 c = *source_dest;
-                *source_dest = ((((c >> alpha_shift.index) & 0xFF) << 24) |
-                            (((c >> red_shift.index)   & 0xFF) << 16) |
-                            (((c >> green_shift.index) & 0xFF) << 8)  |
-                            (((c >> blue_shift.index)  & 0xFF) << 0));
+                *source_dest = (((c >> alpha_shift.index) & 0xFF) << 24) |
+                               (((c >> red_shift.index)   & 0xFF) << 16) |
+                               (((c >> green_shift.index) & 0xFF) << 8)  |
+                               (((c >> blue_shift.index)  & 0xFF) << 0);
                 source_dest += 1;
             }
         }
@@ -95,17 +102,17 @@ void draw_bitmap(GameOffscreenBuffer *buffer, LoadedBitmap *bitmap, f32 real_x, 
             f32 sr = (f32)((*source >> 16) & 0xFF);
             f32 sg = (f32)((*source >> 8)  & 0xFF);
             f32 sb = (f32)((*source >> 0)  & 0xFF);
-            
+
             f32 dr = (f32)((*dest >> 16) & 0xFF);
             f32 dg = (f32)((*dest >> 8)  & 0xFF);
             f32 db = (f32)((*dest >> 0)  & 0xFF);
-            
+
             f32 r = (1.0 - a) * dr + a * sr;
             f32 g = (1.0 - a) * dg + a * sg;
             f32 b = (1.0 - a) * db + a * sb;
-            
-            *dest = (((u32)(r + 0.5) << 16) | ((u32)(g + 0.5) << 8) | ((u32)(b + 0.5) << 0));
-            
+
+            *dest = ((u32)(r + 0.5) << 16) | ((u32)(g + 0.5) << 8) | ((u32)(b + 0.5) << 0);
+
             dest += 1;
             source += 1;
         }
@@ -114,7 +121,7 @@ void draw_bitmap(GameOffscreenBuffer *buffer, LoadedBitmap *bitmap, f32 real_x, 
     }
 }
 
-void 
+void
 draw_rectangle(GameOffscreenBuffer *buffer, Vec2 v_min, Vec2 v_max, f32 r, f32 g, f32 b) {
     i32 min_x = round_f32_to_i32(v_min.x);
     i32 min_y = round_f32_to_i32(v_min.y);
@@ -138,7 +145,7 @@ draw_rectangle(GameOffscreenBuffer *buffer, Vec2 v_min, Vec2 v_max, f32 r, f32 g
     u32 color = (round_f32_to_u32(r * 255.0) << 16)
         | (round_f32_to_u32(g * 255.0) << 8)
         | (round_f32_to_u32(b * 255.0) << 0);
-    
+
     u8 *row = (u8 *)buffer->memory + min_x * buffer->bytes_per_pixel + min_y * buffer->pitch;
 
     for (i32 y = min_y; y < max_y; y++) {
@@ -151,8 +158,86 @@ draw_rectangle(GameOffscreenBuffer *buffer, Vec2 v_min, Vec2 v_max, f32 r, f32 g
     }
 }
 
+u32 rgb(f32 r, f32 g, f32 b) {
+    u32 result = (round_f32_to_u32(r * 255.0) << 16)
+        | (round_f32_to_u32(g * 255.0) << 8)
+        | (round_f32_to_u32(b * 255.0) << 0);
+    return result;
+}
+
+void put_pixel(GameOffscreenBuffer *buffer, f32 x, f32 y, u32 color) {
+    if (!(x < 0 || y < 0)) {
+        u8 *pixel =
+        (u8 *)buffer->memory +
+        (i32)x * buffer->bytes_per_pixel +
+        (i32)y * buffer->pitch;
+        
+        *(u32 *)pixel = color;
+    }
+}
+
+void draw_line(GameOffscreenBuffer *buffer, Vec3 origin, Vec3 target, u32 color) {
+    f32 dx = target.x - origin.x;
+    f32 dy = target.y - origin.y;
+
+    f32 distance = sqrtf(dx * dx + dy * dy);
+
+    if (distance == 0.0f)
+        return;
+
+    f32 step_x = dx / distance;
+    f32 step_y = dy / distance;
+
+    f32 x = origin.x;
+    f32 y = origin.y;
+
+    for (i32 i = 0; i <= (i32)distance; i++) {
+        put_pixel(buffer, x, y, color);
+
+        x += step_x;
+        y += step_y;
+    }
+}
+
+// NOTE: DOES NOT WORK :)
+// void draw_line(GameOffscreenBuffer *buffer, Vec3 origin, Vec3 target, u32 color) {
+//     Vec3 current = origin;
+
+//     Vec3 line_vec = target - origin;
+//     Vec3 line_vec_unit = vec3_normalize(line_vec);
+//     i32 dist = (i32)vec3_len(line_vec);
+//     i32 steps_done = 0;
+
+//     // NOTE: We're inverting the step because (i think) we're drawing from top left towards bottom right,
+//     // but our coordinate system behaves normally with y being up and x being right.
+//     f32 step_x = -line_vec.x >= 0.0 ? 1.0 : -1.0;
+//     f32 step_y = -line_vec.y >= 0.0 ? 1.0 : -1.0;
+
+//     do {
+//         // TODO: Better way to guard against writing outside the buffer
+//         u8 *pixel = (u8 *)buffer->memory + (i32)current.x *buffer->bytes_per_pixel + (i32)current.y * buffer->pitch;
+//         *(u32 *)pixel = color;
+
+//         Vec3 candidate1 = vec3(current.x + step_x, current.y, current.z);
+//         Vec3 candidate2 = vec3(current.x, current.y + step_y, current.z);
+
+//         f32 a = vec3_cross(candidate1 - current, line_vec_unit);
+//         f32 b = vec3_cross(candidate2 - current, line_vec_unit);
+
+//         current = a < b ? candidate1 : candidate2;
+//         steps_done += 1;
+//     } while (steps_done <= dist);
+// }
+
+void draw_square(GameOffscreenBuffer *buffer, Vec3 p1, Vec3 p2, Vec3 p3, Vec3 p4) {
+    draw_line(buffer, p1, p2, COLOR_BLACK);
+    draw_line(buffer, p2, p3, COLOR_BLACK);
+    draw_line(buffer, p3, p4, COLOR_BLACK);
+    draw_line(buffer, p4, p1, COLOR_BLACK);
+}
+
 void game_output_sound(GameState *game_state, GameSoundOutputBuffer *sound_buffer, u32 tone_hz) {
-    f32 tone_volume = 0.0; 
+    f32 tone_volume = 0.0;
     u32 wave_period = sound_buffer->samples_per_second / tone_hz;
 
     i16 *sample_out = sound_buffer->samples;
@@ -181,374 +266,447 @@ extern "C" GAME_UPDATE_AND_RENDER(game_update_and_render) {
     // TODO: assert len(input.controllers[0].button_state.buttons) ==
     assert(sizeof(GameState) <= memory->permanent_storage_size);
 
-    f32 player_height = 1.5;
-    f32 player_width = player_height * 0.75;
+    // f32 player_height = 1.5;
+    // f32 player_width = player_height * 0.75
 
     GameState *game_state = (GameState *)memory->permanent_storage;
 
-    if (!memory->is_initialized) {
-        game_state->backdrop = debug_load_bmp(thread, memory->debug_platform_read_entire_file, str8_lit("../test/test_background.bmp"));
+    // if (!memory->is_initialized) {
+    //     game_state->backdrop = debug_load_bmp(thread, memory->debug_platform_read_entire_file, str8_lit("../test/test_background.bmp"));
 
-        game_state->hero_bitmaps[0] = HeroBitmaps{
-            .align_x = 22,
-            .align_y = 56,
-            .whole_player = debug_load_bmp(thread, memory->debug_platform_read_entire_file, str8_lit("../test/player.bmp")),
-            .cape = 0,
-        };
-        game_state->hero_bitmaps[1] = HeroBitmaps{
-            .align_x = 22,
-            .align_y = 56,
-            .whole_player = debug_load_bmp(thread, memory->debug_platform_read_entire_file, str8_lit("../test/player_cape_front.bmp")),
-            .cape = 0,
-        };
+    //     game_state->hero_bitmaps[0] = HeroBitmaps{
+    //         .align_x = 22,
+    //         .align_y = 56,
+    //         .whole_player = debug_load_bmp(thread, memory->debug_platform_read_entire_file, str8_lit("../test/player.bmp")),
+    //         .cape = 0,
+    //     };
+    //     game_state->hero_bitmaps[1] = HeroBitmaps{
+    //         .align_x = 22,
+    //         .align_y = 56,
+    //         .whole_player = debug_load_bmp(thread, memory->debug_platform_read_entire_file, str8_lit("../test/player_cape_front.bmp")),
+    //         .cape = 0,
+    //     };
 
-        game_state->player_p.abs_tile_x = 3;
-        game_state->player_p.abs_tile_y = 3;
-        game_state->player_p.offset = vec2(5.0, 5.0);
+    //     game_state->player_p.abs_tile_x = 3;
+    //     game_state->player_p.abs_tile_y = 3;
+    //     game_state->player_p.offset = vec2(5.0, 5.0);
 
-        game_state->camera_p.abs_tile_x = game_state->player_p.abs_tile_x;
-        game_state->camera_p.abs_tile_y = game_state->player_p.abs_tile_y;
-        game_state->camera_p.offset = game_state->player_p.offset;
+    //     game_state->camera_p.abs_tile_x = game_state->player_p.abs_tile_x;
+    //     game_state->camera_p.abs_tile_y = game_state->player_p.abs_tile_y;
+    //     game_state->camera_p.offset = game_state->player_p.offset;
 
-        arena_init(
-            &game_state->world_arena, 
-            (u8 *)memory->permanent_storage + sizeof(GameState), 
-            memory->permanent_storage_size - sizeof(GameState)
-        );
-        
-        game_state->world = push_array(&game_state->world_arena, World, 1);
-        World *world = game_state->world;
-        world->tile_map = push_array(&game_state->world_arena, TileMap, 1);
-        TileMap *tile_map = world->tile_map;
+    //     arena_init(
+    //         &game_state->world_arena,
+    //         (u8 *)memory->permanent_storage + sizeof(GameState),
+    //         memory->permanent_storage_size - sizeof(GameState)
+    //     );
 
-        tile_map->chunk_shift = 4;
-        tile_map->chunk_mask = (1 << tile_map->chunk_shift) - 1;
-        tile_map->chunk_dim = 1 << tile_map->chunk_shift;
+    //     game_state->world = push_array(&game_state->world_arena, World, 1);
+    //     World *world = game_state->world;
+    //     world->tile_map = push_array(&game_state->world_arena, TileMap, 1);
+    //     TileMap *tile_map = world->tile_map;
 
-        tile_map->tile_chunk_count_x = 128;
-        tile_map->tile_chunk_count_y = 128;
-        tile_map->tile_chunk_count_z = 2;
-        
-        tile_map->tile_chunks = push_array(
-            &game_state->world_arena, 
-            TileChunk, 
-            tile_map->tile_chunk_count_x * tile_map->tile_chunk_count_y * tile_map->tile_chunk_count_z
-        );
+    //     tile_map->chunk_shift = 4;
+    //     tile_map->chunk_mask = (1 << tile_map->chunk_shift) - 1;
+    //     tile_map->chunk_dim = 1 << tile_map->chunk_shift;
 
-        tile_map->tile_side_in_meters = 1.5;
+    //     tile_map->tile_chunk_count_x = 128;
+    //     tile_map->tile_chunk_count_y = 128;
+    //     tile_map->tile_chunk_count_z = 2;
 
-        u64 random_number_index = 0;
+    //     tile_map->tile_chunks = push_array(
+    //         &game_state->world_arena,
+    //         TileChunk,
+    //         tile_map->tile_chunk_count_x * tile_map->tile_chunk_count_y * tile_map->tile_chunk_count_z
+    //     );
 
-        // Build tile_map
-        u32 tiles_per_width = 17;
-        u32 tiles_per_height = 9;
+    //     tile_map->tile_side_in_meters = 1.5;
 
-        u32 screen_x = 0;
-        u32 screen_y = 0;
-        u32 abs_tile_z = 0;
+    //     u64 random_number_index = 0;
 
-        b32 door_left = false;
-        b32 door_right = false;
-        b32 door_top = false;
-        b32 door_bottom = false;
-        b32 door_up = false;
-        b32 door_down = false;
+    //     // Build tile_map
+    //     u32 tiles_per_width = 17;
+    //     u32 tiles_per_height = 9;
 
-        for (i32 screen_index = 0; screen_index < 100; screen_index++) {
-            assert(random_number_index < array_count(RANDOM_NUMBER_TABLE));
+    //     u32 screen_x = 0;
+    //     u32 screen_y = 0;
+    //     u32 abs_tile_z = 0;
 
-            u32 random_choice;
+    //     b32 door_left = false;
+    //     b32 door_right = false;
+    //     b32 door_top = false;
+    //     b32 door_bottom = false;
+    //     b32 door_up = false;
+    //     b32 door_down = false;
 
-            if (door_up || door_down) {
-                random_choice = RANDOM_NUMBER_TABLE[random_number_index] % 2;
-            }
-            else {
-                random_choice = RANDOM_NUMBER_TABLE[random_number_index] % 3;
-            }
+    //     for (i32 screen_index = 0; screen_index < 100; screen_index++) {
+    //         assert(random_number_index < array_count(RANDOM_NUMBER_TABLE));
 
-            random_number_index += 1;
+    //         u32 random_choice;
 
-            b32 created_z_door = false;
+    //         if (door_up || door_down) {
+    //             random_choice = RANDOM_NUMBER_TABLE[random_number_index] % 2;
+    //         }
+    //         else {
+    //             random_choice = RANDOM_NUMBER_TABLE[random_number_index] % 3;
+    //         }
 
-            if (random_choice == 2) {
-                created_z_door = true;
-                if (abs_tile_z == 0) {
-                    door_up = true;
-                }
-                else {
-                    door_down = true;
-                }
-            }
-            else if (random_choice == 1) {
-                door_right = true;
-            }
-            else {
-                door_top = true;
-            }
+    //         random_number_index += 1;
 
-            for (u32 tile_y = 0; tile_y < tiles_per_height; tile_y++) {
-                for (u32 tile_x = 0; tile_x < tiles_per_width; tile_x++) {
-                    u32 abs_tile_x = (screen_x * tiles_per_width) + tile_x;
-                    u32 abs_tile_y = (screen_y * tiles_per_height) + tile_y;
+    //         b32 created_z_door = false;
 
-                    u32 tile_value = 1;
+    //         if (random_choice == 2) {
+    //             created_z_door = true;
+    //             if (abs_tile_z == 0) {
+    //                 door_up = true;
+    //             }
+    //             else {
+    //                 door_down = true;
+    //             }
+    //         }
+    //         else if (random_choice == 1) {
+    //             door_right = true;
+    //         }
+    //         else {
+    //             door_top = true;
+    //         }
 
-                    if (tile_x == 0 && (!door_left || tile_y != tiles_per_height / 2)) {
-                        tile_value = 2;
-                    }
-                    if (tile_x == (tiles_per_width - 1) && (!door_right || tile_y != tiles_per_height / 2)) {
-                        tile_value = 2;
-                    }
-                    if (tile_y == 0 && (!door_bottom || tile_x != tiles_per_width / 2)) {
-                        tile_value = 2;
-                    }
-                    if (tile_y == (tiles_per_height - 1) && (!door_top || tile_x != tiles_per_width / 2)) {
-                        tile_value = 2; 
-                    }
-                    if (tile_x == 10 && tile_y == 5) {
-                        if (door_up) {
-                            tile_value = 3;
-                        }
-                        if (door_down) {
-                            tile_value = 4;
-                        }
-                    }
+    //         for (u32 tile_y = 0; tile_y < tiles_per_height; tile_y++) {
+    //             for (u32 tile_x = 0; tile_x < tiles_per_width; tile_x++) {
+    //                 u32 abs_tile_x = (screen_x * tiles_per_width) + tile_x;
+    //                 u32 abs_tile_y = (screen_y * tiles_per_height) + tile_y;
 
-                    set_tile_value(
-                        &game_state->world_arena,
-                        world->tile_map,
-                        abs_tile_x,
-                        abs_tile_y,
-                        abs_tile_z,
-                        tile_value
-                    );
-                }
-            }
+    //                 u32 tile_value = 1;
 
-            door_left = door_right;
-            door_bottom = door_top;
+    //                 if (tile_x == 0 && (!door_left || tile_y != tiles_per_height / 2)) {
+    //                     tile_value = 2;
+    //                 }
+    //                 if (tile_x == (tiles_per_width - 1) && (!door_right || tile_y != tiles_per_height / 2)) {
+    //                     tile_value = 2;
+    //                 }
+    //                 if (tile_y == 0 && (!door_bottom || tile_x != tiles_per_width / 2)) {
+    //                     tile_value = 2;
+    //                 }
+    //                 if (tile_y == (tiles_per_height - 1) && (!door_top || tile_x != tiles_per_width / 2)) {
+    //                     tile_value = 2;
+    //                 }
+    //                 if (tile_x == 10 && tile_y == 5) {
+    //                     if (door_up) {
+    //                         tile_value = 3;
+    //                     }
+    //                     if (door_down) {
+    //                         tile_value = 4;
+    //                     }
+    //                 }
 
-            if (created_z_door) {
-                door_down = !door_down;
-                door_up = !door_up;
-            }
-            else {
-                door_up = false;
-                door_down = false;
-            }
+    //                 set_tile_value(
+    //                     &game_state->world_arena,
+    //                     world->tile_map,
+    //                     abs_tile_x,
+    //                     abs_tile_y,
+    //                     abs_tile_z,
+    //                     tile_value
+    //                 );
+    //             }
+    //         }
 
-            door_right = false;
-            door_top = false;
+    //         door_left = door_right;
+    //         door_bottom = door_top;
 
-            if (random_choice == 2) {
-                if (abs_tile_z == 0) {
-                    abs_tile_z = 1;
-                } 
-                else {
-                    abs_tile_z = 0;
-                }
-            }
-            else if (random_choice == 1) {
-                screen_x += 1;
-            }
-            else {
-                screen_y += 1;
-            }
-        }
+    //         if (created_z_door) {
+    //             door_down = !door_down;
+    //             door_up = !door_up;
+    //         }
+    //         else {
+    //             door_up = false;
+    //             door_down = false;
+    //         }
 
-        memory->is_initialized = true;
-    }
+    //         door_right = false;
+    //         door_top = false;
 
-    World *world = game_state->world;
-    TileMap *tile_map = world->tile_map;
+    //         if (random_choice == 2) {
+    //             if (abs_tile_z == 0) {
+    //                 abs_tile_z = 1;
+    //             }
+    //             else {
+    //                 abs_tile_z = 0;
+    //             }
+    //         }
+    //         else if (random_choice == 1) {
+    //             screen_x += 1;
+    //         }
+    //         else {
+    //             screen_y += 1;
+    //         }
+    //     }
 
-    i32 tile_side_in_pixels = 60;
-    f32 meters_to_pixels = (f32)tile_side_in_pixels / tile_map->tile_side_in_meters;
+    //     memory->is_initialized = true;
+    // }
 
-    for (u64 controller_index = 0; controller_index < array_count(input->controllers); controller_index++) {
-        GameControllerInput *controller = get_controller(input, controller_index);
+    // World *world = game_state->world;
+    // TileMap *tile_map = world->tile_map;
 
-        if (controller->is_analog) {
+    // i32 tile_side_in_pixels = 60;
+    // f32 meters_to_pixels = (f32)tile_side_in_pixels / tile_map->tile_side_in_meters;
 
-        }
-        else {
-            Vec2 dd_player = {};
+    // for (u64 controller_index = 0; controller_index < array_count(input->controllers); controller_index++) {
+    //     GameControllerInput *controller = get_controller(input, controller_index);
 
-            //Fix facing directions when we have more bitmaps with facing directions
-            if (controller->move_up.ended_down) {
-                game_state->hero_facing_direction = 0;
-                dd_player.y = 1.0;
-            }
-            if (controller->move_down.ended_down) {
-                game_state->hero_facing_direction = 0;
-                dd_player.y = -1.0;
-            }
-            if (controller->move_left.ended_down) {
-                game_state->hero_facing_direction = 0;
-                dd_player.x = -1.0;
-            }
-            if (controller->move_right.ended_down) {
-                game_state->hero_facing_direction = 1;
-                dd_player.x = 1.0;
-            }
+    //     if (controller->is_analog) {
 
-            if (dd_player.x != 0.0 && dd_player.y != 0.0) {
-                dd_player = dd_player * 0.707106781; // Sqrt(0.5) = 0.707106781
-            }
+    //     }
+    //     else {
+    //         Vec2 dd_player = {};
 
-            // Walking Speed
-            f32 player_speed = 10.0; // meters/second^2
-            if (controller->back.ended_down) {
-                player_speed *= 3.0;
-            }
-            dd_player = dd_player * player_speed;
+    //         //Fix facing directions when we have more bitmaps with facing directions
+    //         if (controller->move_up.ended_down) {
+    //             game_state->hero_facing_direction = 0;
+    //             dd_player.y = 1.0;
+    //         }
+    //         if (controller->move_down.ended_down) {
+    //             game_state->hero_facing_direction = 0;
+    //             dd_player.y = -1.0;
+    //         }
+    //         if (controller->move_left.ended_down) {
+    //             game_state->hero_facing_direction = 0;
+    //             dd_player.x = -1.0;
+    //         }
+    //         if (controller->move_right.ended_down) {
+    //             game_state->hero_facing_direction = 1;
+    //             dd_player.x = 1.0;
+    //         }
 
-            dd_player = dd_player + (-game_state->d_player_p) * 3.5;
+    //         if (dd_player.x != 0.0 && dd_player.y != 0.0) {
+    //             dd_player = dd_player * 0.707106781; // Sqrt(0.5) = 0.707106781
+    //         }
 
-            TileMapPosition new_player_p = game_state->player_p;
-            // 1/2 * a * dt + v * dt + p
-            new_player_p.offset = dd_player * 0.5 * square(input->dt_for_frame) 
-                + game_state->d_player_p * input->dt_for_frame 
-                + new_player_p.offset;
+    //         // Walking Speed
+    //         f32 player_speed = 10.0; // meters/second^2
+    //         if (controller->back.ended_down) {
+    //             player_speed *= 3.0;
+    //         }
+    //         dd_player = dd_player * player_speed;
 
-            game_state->d_player_p = dd_player * input->dt_for_frame + game_state->d_player_p;
+    //         dd_player = dd_player + (-game_state->d_player_p) * 3.5;
 
-            new_player_p = recanonicalize_position(tile_map, new_player_p);
+    //         TileMapPosition new_player_p = game_state->player_p;
+    //         // 1/2 * a * dt + v * dt + p
+    //         new_player_p.offset = dd_player * 0.5 * square(input->dt_for_frame)
+    //             + game_state->d_player_p * input->dt_for_frame
+    //             + new_player_p.offset;
 
-            TileMapPosition player_left = new_player_p;
-            player_left.offset.x -= player_width * 0.5;
-            player_left = recanonicalize_position(tile_map, player_left);
+    //         game_state->d_player_p = dd_player * input->dt_for_frame + game_state->d_player_p;
 
-            TileMapPosition player_right = new_player_p;
-            player_right.offset.x += player_width * 0.5;
-            player_right = recanonicalize_position(tile_map, player_right);
+    //         new_player_p = recanonicalize_position(tile_map, new_player_p);
 
-            b32 collided = false;
-            TileMapPosition col_p = {};
-            
-            if (!is_tile_map_point_empty(tile_map, new_player_p)) {
-                col_p = new_player_p;
-                collided = true;
-            }
+    //         TileMapPosition player_left = new_player_p;
+    //         player_left.offset.x -= player_width * 0.5;
+    //         player_left = recanonicalize_position(tile_map, player_left);
 
-            if (!is_tile_map_point_empty(tile_map, player_left)) {
-                col_p = player_left;
-                collided = true;
-            }
+    //         TileMapPosition player_right = new_player_p;
+    //         player_right.offset.x += player_width * 0.5;
+    //         player_right = recanonicalize_position(tile_map, player_right);
 
-            if (!is_tile_map_point_empty(tile_map, player_right)) {
-                col_p = player_right;
-                collided = true;
-            }
+    //         b32 collided = false;
+    //         TileMapPosition col_p = {};
 
-            if (collided) {
-                Vec2 r = {};
+    //         if (!is_tile_map_point_empty(tile_map, new_player_p)) {
+    //             col_p = new_player_p;
+    //             collided = true;
+    //         }
 
-                if (col_p.abs_tile_x < game_state->player_p.abs_tile_x) {
-                    r = vec2(1.0, 0.0);
-                }
-                if (col_p.abs_tile_x > game_state->player_p.abs_tile_x) {
-                    r = vec2(-1.0, 0.0);
-                }
-                if (col_p.abs_tile_y < game_state->player_p.abs_tile_y) {
-                    r = vec2(0.0, 1.0);
-                }
-                if (col_p.abs_tile_y > game_state->player_p.abs_tile_y) {
-                    r = vec2(0.0, -1.0);
-                }
-                game_state->d_player_p = game_state->d_player_p - r * vec2_dot(game_state->d_player_p, r) * 1.0;
-            }
-            else {
-                if (!are_on_same_tile(&game_state->player_p, &new_player_p)) {
-                    u32 new_tile_value = get_tile_value_from_map_pos(tile_map, new_player_p);
-                    if (new_tile_value == 3) {
-                        new_player_p.abs_tile_z += 1;
-                    }
-                    else if (new_tile_value == 4) {
-                        new_player_p.abs_tile_z -= 1;
-                    }
-                }
-                game_state->player_p = new_player_p;
-                game_state->camera_p = new_player_p;
-            }
-        }
-    }
+    //         if (!is_tile_map_point_empty(tile_map, player_left)) {
+    //             col_p = player_left;
+    //             collided = true;
+    //         }
+
+    //         if (!is_tile_map_point_empty(tile_map, player_right)) {
+    //             col_p = player_right;
+    //             collided = true;
+    //         }
+
+    //         if (collided) {
+    //             Vec2 r = {};
+
+    //             if (col_p.abs_tile_x < game_state->player_p.abs_tile_x) {
+    //                 r = vec2(1.0, 0.0);
+    //             }
+    //             if (col_p.abs_tile_x > game_state->player_p.abs_tile_x) {
+    //                 r = vec2(-1.0, 0.0);
+    //             }
+    //             if (col_p.abs_tile_y < game_state->player_p.abs_tile_y) {
+    //                 r = vec2(0.0, 1.0);
+    //             }
+    //             if (col_p.abs_tile_y > game_state->player_p.abs_tile_y) {
+    //                 r = vec2(0.0, -1.0);
+    //             }
+    //             game_state->d_player_p = game_state->d_player_p - r * vec2_dot(game_state->d_player_p, r) * 1.0;
+    //         }
+    //         else {
+    //             if (!are_on_same_tile(&game_state->player_p, &new_player_p)) {
+    //                 u32 new_tile_value = get_tile_value_from_map_pos(tile_map, new_player_p);
+    //                 if (new_tile_value == 3) {
+    //                     new_player_p.abs_tile_z += 1;
+    //                 }
+    //                 else if (new_tile_value == 4) {
+    //                     new_player_p.abs_tile_z -= 1;
+    //                 }
+    //             }
+    //             game_state->player_p = new_player_p;
+    //             game_state->camera_p = new_player_p;
+    //         }
+    //     }
+    // }
 
     //Clear Screen
     draw_rectangle(
-        buffer, 
+        buffer,
         vec2(0.0, 0.0),
         vec2((f32)buffer->width, (f32)buffer->height),
         1.0,
-        0.0,
+        1.0,
         1.0
     );
 
-    // Draw background
-    draw_bitmap(buffer, &game_state->backdrop, 0.0, 0.0, 0, 0);
+    Vec3 vertices[] = {
+        vec3(0, 0, 0),
+        vec3(0, 1, 0),
+        vec3(1, 0, 0),
+        vec3(1, 1, 0),
+        vec3(0, 0, 1),
+        vec3(1, 0, 1),
+        vec3(0, 1, 1),
+        vec3(1, 1, 1),
+     };
 
-    // Draw screen
-    f32 screen_center_x = 0.5 * (f32)buffer->width;
-    f32 screen_center_y = 0.5 * (f32)buffer->height;
+    Vec3 cube[6][4] = {
+        { vec3(0, 0, 0), vec3(0, 1, 0), vec3(1, 1, 0), vec3(1, 0, 0) },
+        { vec3(0, 0, 1), vec3(0, 1, 1), vec3(0, 1, 0), vec3(0, 0, 0) },
+        { vec3(0, 0, 1), vec3(0, 1, 1), vec3(1, 1, 1), vec3(1, 0, 1) },
+        { vec3(1, 0, 0), vec3(1, 1, 0), vec3(1, 1, 1), vec3(1, 0, 1) },
+        { vec3(0, 1, 0), vec3(0, 1, 1), vec3(1, 1, 1), vec3(1, 1, 0) },
+        { vec3(0, 0, 0), vec3(0, 0, 1), vec3(1, 0, 1), vec3(1, 0, 0) },
+    };
 
-    for (i32 rel_row = -100; rel_row < 100; rel_row++) {
-        for (i32 rel_column = -200; rel_column < 200; rel_column++) {
-            u32 column = game_state->player_p.abs_tile_x + rel_column;
-            u32 row = game_state->camera_p.abs_tile_y + rel_row;
+    f32 near_plane = 0.1;
+    f32 far_plane  = 100.0;
+    f32 aspect_ratio = (f32)buffer->width / (f32)buffer->height;
+    f32 fov = 90.0;
+    f32 fov_rad = 1.0 / tanf(fov * 0.5 / 180.0 * 3.14159);
+
+    Mat3x3 rotation_matrix = {0};
+    game_state->rotation_speed += 0.05 * input->dt_for_frame;
+    f32 angle = game_state->rotation_speed;
+
+    rotation_matrix.m[0][0] = cosf(angle);
+    rotation_matrix.m[0][2] = sinf(angle);
+    rotation_matrix.m[1][1] = 1;
+    rotation_matrix.m[2][0] = -sinf(angle);
+    rotation_matrix.m[2][2] = cosf(angle);
+
+    Mat3x3 proj_matrix = {0};
+    proj_matrix.m[0][0] = fov_rad / aspect_ratio;
+    proj_matrix.m[1][1] = fov_rad;
+    proj_matrix.m[2][2] = far_plane / (far_plane - near_plane);
+    // proj_matrix.m[3][2] = (-far_plane * near_plane) / (far_plane - near_plane);
+    // proj_matrix.m[2][3] = 1.0;
+    // proj_matrix.m[3][3] = 0.0;
+
+    Vec3 projected_vertices[6][4] = {0};
+    for (u32 i = 0; i < 6; i++) {
+        for (u32 j = 0; j < 4; j++) {
+            Vec3 vertex = cube[i][j];
+            vertex.x -= 0.5;
+            vertex.y -= 0.5;
+            vertex.z -= 0.5;
             
-            u32 tile_id = get_tile_value(tile_map, column, row, game_state->camera_p.abs_tile_z);
+            vertex = vertex * rotation_matrix;
+            
+            vertex.z += 2.0;
 
-            if (tile_id > 1) {
-                f32 gray = 0.5;
+            vertex.x /= vertex.z;
+            vertex.y /= vertex.z;
 
-                if (tile_id == 2) {
-                    gray = 1.0;
-                }
+            Vec3 projected = vertex * proj_matrix;
 
-                if (tile_id > 2) {
-                    gray = 0.25;
-                }
+            projected.x = (projected.x + 1) * 0.5 * (f32)buffer->width;
+            projected.y = (1.0 - projected.y) * 0.5 * (f32)buffer->height;
 
-                if (column == game_state->camera_p.abs_tile_x && row == game_state->camera_p.abs_tile_y) {
-                    gray = 0.0;
-                }
-
-                Vec2 tile_side = vec2(0.5 * (f32)tile_side_in_pixels, 0.5 * (f32)tile_side_in_pixels);
-
-                Vec2 cen = vec2(screen_center_x - meters_to_pixels * game_state->camera_p.offset.x + (f32)(rel_column * tile_side_in_pixels),
-                                screen_center_y + meters_to_pixels * game_state->camera_p.offset.y - (f32)(rel_row * tile_side_in_pixels));
-                
-                Vec2 min = cen - tile_side;
-                Vec2 max = cen + tile_side;
-                
-                draw_rectangle(buffer, min, max, gray, gray, gray);
-            }
+            projected_vertices[i][j] = projected;
         }
     }
 
-    // camera stuff that we might need? for now just scroll the screen.
-    // Vec2 diff = subtract(tile_map, &game_state.player_p, &game_state.camera_p);
+    for (u32 i = 0; i < 6; i++) {
+        draw_square(buffer, projected_vertices[i][0], projected_vertices[i][1], projected_vertices[i][2], projected_vertices[i][3]);
+    }
 
-    f32 player_ground_point_x = screen_center_x;
-    f32 player_ground_point_y = screen_center_y;
+    // draw_square(buffer, projected_vertices[2], projected_vertices[3], projected_vertices[7], projected_vertices[5]);
+    // Draw background
+    // draw_bitmap(buffer, &game_state->backdrop, 0.0, 0.0, 0, 0);
 
-    Vec2 player_left_top = vec2(player_ground_point_x - 0.5 * player_width * meters_to_pixels,
-                                player_ground_point_y - player_height * meters_to_pixels);
-        
-    Vec2 player_width_height = vec2(player_width, player_height);
+    // Draw screen
+    // f32 screen_center_x = 0.5 * (f32)buffer->width;
+    // f32 screen_center_y = 0.5 * (f32)buffer->height;
 
-    // Draw player
-    draw_rectangle(buffer, player_left_top, player_left_top + meters_to_pixels * player_width_height, 1.0, 0.0, 0.0);
+    // for (i32 rel_row = -100; rel_row < 100; rel_row++) {
+    //     for (i32 rel_column = -200; rel_column < 200; rel_column++) {
+    //         u32 column = game_state->player_p.abs_tile_x + rel_column;
+    //         u32 row = game_state->camera_p.abs_tile_y + rel_row;
 
-    HeroBitmaps *hero_bitmaps = &game_state->hero_bitmaps[game_state->hero_facing_direction];
+    //         u32 tile_id = get_tile_value(tile_map, column, row, game_state->camera_p.abs_tile_z);
 
-    draw_bitmap(buffer, &hero_bitmaps->whole_player, 
-                player_ground_point_x, player_ground_point_y, 
-                hero_bitmaps->align_x, hero_bitmaps->align_y);
-        
-    draw_bitmap(buffer, &hero_bitmaps->cape, 
-                player_ground_point_x, player_ground_point_y,
-                hero_bitmaps->align_x, hero_bitmaps->align_y);
+    //         if (tile_id > 1) {
+    //             f32 gray = 0.5;
+
+    //             if (tile_id == 2) {
+    //                 gray = 1.0;
+    //             }
+
+    //             if (tile_id > 2) {
+    //                 gray = 0.25;
+    //             }
+
+    //             if (column == game_state->camera_p.abs_tile_x && row == game_state->camera_p.abs_tile_y) {
+    //                 gray = 0.0;
+    //             }
+
+    //             Vec2 tile_side = vec2(0.5 * (f32)tile_side_in_pixels, 0.5 * (f32)tile_side_in_pixels);
+
+    //             Vec2 cen = vec2(screen_center_x - meters_to_pixels * game_state->camera_p.offset.x + (f32)(rel_column * tile_side_in_pixels),
+    //                             screen_center_y + meters_to_pixels * game_state->camera_p.offset.y - (f32)(rel_row * tile_side_in_pixels));
+
+    //             Vec2 min = cen - tile_side;
+    //             Vec2 max = cen + tile_side;
+
+    //             draw_rectangle(buffer, min, max, gray, gray, gray);
+    //         }
+    //     }
+    // }
+
+    // // camera stuff that we might need? for now just scroll the screen.
+    // // Vec2 diff = subtract(tile_map, &game_state.player_p, &game_state.camera_p);
+
+    // f32 player_ground_point_x = screen_center_x;
+    // f32 player_ground_point_y = screen_center_y;
+
+    // Vec2 player_left_top = vec2(player_ground_point_x - 0.5 * player_width * meters_to_pixels,
+    //                             player_ground_point_y - player_height * meters_to_pixels);
+
+    // Vec2 player_width_height = vec2(player_width, player_height);
+
+    // // Draw player
+    // draw_rectangle(buffer, player_left_top, player_left_top + meters_to_pixels * player_width_height, 1.0, 0.0, 0.0);
+
+    // HeroBitmaps *hero_bitmaps = &game_state->hero_bitmaps[game_state->hero_facing_direction];
+
+    // draw_bitmap(buffer, &hero_bitmaps->whole_player,
+    //             player_ground_point_x, player_ground_point_y,
+    //             hero_bitmaps->align_x, hero_bitmaps->align_y);
+
+    // draw_bitmap(buffer, &hero_bitmaps->cape,
+    //             player_ground_point_x, player_ground_point_y,
+    //             hero_bitmaps->align_x, hero_bitmaps->align_y);
 }
 
 void

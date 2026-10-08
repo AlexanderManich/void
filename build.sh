@@ -1,0 +1,1 @@
+g++ platform/linux_platform.cpp -o build/void -lX11

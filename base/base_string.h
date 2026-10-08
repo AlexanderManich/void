@@ -1,7 +1,7 @@
 #ifndef BASE_STRING_H
 #define BASE_STRING_H
 
-#include "string.h"
+// #include "string.h"
 
 typedef struct String8 String8;
 struct String8 {
